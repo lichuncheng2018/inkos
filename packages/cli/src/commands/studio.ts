@@ -169,7 +169,11 @@ export async function resolveStudioLaunch(root: string): Promise<StudioLaunchSpe
   return null;
 }
 
-export async function launchStudioWorkbench(root: string, port: string, initialHash = ""): Promise<void> {
+export function resolveStudioBindHost(value?: string): string {
+  return value?.trim() || process.env.INKOS_STUDIO_HOST?.trim() || "0.0.0.0";
+}
+
+export async function launchStudioWorkbench(root: string, port: string, initialHash = "", host = resolveStudioBindHost()): Promise<void> {
   const url = `http://localhost:${port}${initialHash}`;
   const launch = await resolveStudioLaunch(root);
 
@@ -187,7 +191,7 @@ export async function launchStudioWorkbench(root: string, port: string, initialH
   const child = spawn(launch.command, launch.args, {
     cwd: root,
     stdio: "inherit",
-    env: { ...process.env, INKOS_STUDIO_PORT: port },
+    env: { ...process.env, INKOS_STUDIO_PORT: port, INKOS_STUDIO_HOST: host },
   });
 
   child.on("error", (e) => {
@@ -217,7 +221,7 @@ export async function launchStudioEntry(
   root: string,
   port: string,
   hooks: StudioCommandHooks = {},
-  options: { readonly explicitProject?: boolean } = {},
+  options: { readonly explicitProject?: boolean; readonly host?: string } = {},
 ): Promise<void> {
   const prepared = await prepareStudioRoot(root, {
     explicitProject: options.explicitProject,
@@ -234,18 +238,19 @@ export async function launchStudioEntry(
     return;
   }
 
-  await launchStudioWorkbench(prepared.root, port, prepared.initialized ? "#/services" : "");
+  await launchStudioWorkbench(prepared.root, port, prepared.initialized ? "#/services" : "", resolveStudioBindHost(options.host));
 }
 
 export function createStudioCommand(hooks: StudioCommandHooks = {}): Command {
   return new Command("studio")
   .description("Start InkOS Studio web workbench")
   .option("-p, --port <port>", "Server port", "4567")
+  .option("--host <host>", "Bind address (0.0.0.0 exposes Studio on your LAN)", process.env.INKOS_STUDIO_HOST?.trim() || "0.0.0.0")
   .option("--project <path>", "Open or initialize a specific InkOS project directory")
   .action(async (opts) => {
     const root = opts.project ? resolve(opts.project) : findProjectRoot();
     const port = opts.port;
-    await launchStudioEntry(root, port, hooks, { explicitProject: Boolean(opts.project) });
+    await launchStudioEntry(root, port, hooks, { explicitProject: Boolean(opts.project), host: opts.host });
   });
 }
 

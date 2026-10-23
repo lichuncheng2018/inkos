@@ -165,6 +165,12 @@ import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } 
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
+import { registerLegadoRoutes } from "./legado.js";
+import {
+  formatStudioListenBanner,
+  isPermittedStudioRequestHost,
+  listLanIpv4Addresses,
+} from "./studio-host.js";
 import { buildStudioBookConfig, normalizeStudioPlatform } from "./book-create.js";
 import {
   deleteStudioTaskSnapshot,
@@ -1729,6 +1735,15 @@ function mergeServiceModelIds(...groups: ReadonlyArray<readonly string[] | undef
   return normalizeServiceModelIds(groups.flatMap((group) => group ?? []));
 }
 
+function resolveWritingPickerModelIds(
+  configuredModels: readonly string[] | undefined,
+  fallbackModels: readonly string[] = [],
+  preferredModels: readonly string[] = [],
+): string[] {
+  const catalog = Array.isArray(configuredModels) ? configuredModels : fallbackModels;
+  return mergeServiceModelIds(catalog, preferredModels);
+}
+
 function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>): ServiceConfigEntry {
   if (serviceId.startsWith("custom:")) {
     return {
@@ -2602,15 +2617,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return task ? activeConfirmedTasks.get(task.execution.id) : undefined;
   };
 
-  const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
   const bindHostname = overrides.hostname?.trim().toLowerCase() || "127.0.0.1";
   const allowedOrigins = new Set((overrides.allowedOrigins ?? []).map(origin => new URL(origin).origin));
-  const allowedHosts = new Set([...loopbackHosts, ...[...allowedOrigins].map(origin => new URL(origin).hostname)]);
+  const allowedHosts = new Set([...allowedOrigins].map(origin => new URL(origin).hostname));
   app.use("/*", async (c, next) => {
     const url = new URL(c.req.url);
-    // A loopback listener must not become an API for an arbitrary DNS name.
-    // Explicit network binding retains its configured network scope.
-    if (loopbackHosts.has(bindHostname) && !allowedHosts.has(url.hostname)) {
+    // Loopback binds stay loopback-only. LAN binds accept private hosts, not public DNS names.
+    if (!isPermittedStudioRequestHost(url.hostname, bindHostname, allowedHosts)) {
       throw new ApiError(403, "STUDIO_HOST_FORBIDDEN", "This host is not allowed for the local Studio server.");
     }
     const origin = c.req.header("Origin");
@@ -2653,6 +2666,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     await next();
   });
+
+  registerLegadoRoutes(app, state);
 
   // Logger sink that broadcasts to SSE
   const sseSink: LogSink = {
@@ -3833,9 +3848,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const staticModels = ep.models
         .filter((m) => m.enabled !== false)
         .filter((m) => isTextChatModelId(m.id));
-      const configuredModels = configuredById.get(ep.id)?.models ?? [];
+      const configuredModels = configuredById.get(ep.id)?.models;
       const preferredModel = defaultService === ep.id && defaultModel ? [defaultModel] : [];
-      const models = mergeServiceModelIds(staticModels.map((model) => model.id), configuredModels, preferredModel)
+      const models = resolveWritingPickerModelIds(
+        configuredModels,
+        staticModels.map((model) => model.id),
+        preferredModel,
+      )
         .map((id) => {
           const known = staticModels.find((model) => model.id.toLowerCase() === id.toLowerCase());
           return {
@@ -3866,7 +3885,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         id: `custom:${s.name ?? "Custom"}`,
         baseUrl: s.baseUrl ?? "",
         label: s.name ?? "Custom",
-        models: s.models ?? [],
+        models: s.models,
         apiFormat: s.apiFormat,
       }))
       .filter((s) => s.baseUrl && Boolean(secrets.services[s.id]?.apiKey));
@@ -3877,8 +3896,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       models: filterTextChatModels(
         // Explicit model choices belong to this service/protocol. A shared
         // gateway catalog may advertise models that this protocol cannot call.
-        s.models.length > 0
-          ? mergeServiceModelIds(s.models).map(id => ({ id, name: id }))
+        Array.isArray(s.models)
+          ? resolveWritingPickerModelIds(s.models).map((id) => ({ id, name: id }))
           : await probeModelsFromUpstream(
               s.apiFormat === "anthropic" && !/\/v1\/?$/.test(s.baseUrl)
                 ? `${s.baseUrl.replace(/\/$/, "")}/v1` : s.baseUrl,
@@ -3896,7 +3915,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const secrets = await loadSecrets(root);
     const apiKey = c.req.query("apiKey") || secrets.services[service]?.apiKey || "";
     const configuredEntry = await resolveConfiguredServiceEntry(root, service);
-    const configuredModels = configuredEntry?.models ?? [];
+    const configuredModels = configuredEntry?.models;
 
     const resolvedBaseUrl = await resolveConfiguredServiceBaseUrl(root, service);
     const baseService = isCustomServiceId(service) ? "custom" : service;
@@ -3905,9 +3924,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       baseUrl: resolvedBaseUrl,
     });
 
+    if (Array.isArray(configuredModels)) {
+      return c.json({
+        models: resolveWritingPickerModelIds(configuredModels).map((id) => ({ id, name: id })),
+      });
+    }
+
     // No key = no models, except local/self-hosted endpoints such as Ollama.
     if (!apiKey && !apiKeyOptional) {
-      return c.json({ models: configuredModels.map((id) => ({ id, name: id })) });
+      return c.json({ models: [] });
     }
 
     // Cache by service + resolved baseUrl + apiKey fingerprint; valid for 10 min unless ?refresh=1
@@ -3915,9 +3940,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!refresh) {
       const cached = modelListCache.get(cacheKey);
       if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
-        const models = mergeServiceModelIds(cached.models.map((model) => model.id), configuredModels)
-          .map((id) => cached.models.find((model) => model.id.toLowerCase() === id.toLowerCase()) ?? { id, name: id });
-        return c.json({ models });
+        return c.json({ models: cached.models });
       }
     }
 
@@ -3927,14 +3950,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       apiKey,
       isCustomServiceId(service) ? resolvedBaseUrl ?? undefined : undefined,
     );
-    const liveModels = filterTextChatModels(enriched).map((m) => ({
+    const models = filterTextChatModels(enriched).map((m) => ({
       id: m.id,
       name: m.name,
       ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
       ...(m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
     }));
-    const models = mergeServiceModelIds(liveModels.map((model) => model.id), configuredModels)
-      .map((id) => liveModels.find((model) => model.id.toLowerCase() === id.toLowerCase()) ?? { id, name: id });
     modelListCache.set(cacheKey, { models, at: Date.now() });
     return c.json({ models });
   });
@@ -4920,11 +4941,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const pipelineClient = (reqService && reqModel && resolvedModel)
         ? createLLMClient({
             ...config.llm,
-            service: configuredEntry?.service ?? reqService,
+            service: reqService,
             model: reqModel,
             apiKey: resolvedApiKey ?? "",
-            ...(configuredEntry?.apiFormat ? { apiFormat: configuredEntry.apiFormat } : {}),
-            ...(configuredEntry?.stream !== undefined ? { stream: configuredEntry.stream } : {}),
+            apiFormat: configuredEntry?.apiFormat,
+            stream: configuredEntry?.stream,
             baseUrl: configuredEntry?.baseUrl ?? "",
           } as any)
         : client;
@@ -6711,6 +6732,10 @@ export async function startStudioServer(
   }
 
   const hostname = options?.hostname?.trim() || "127.0.0.1";
-  console.log(`InkOS Studio running on http://${hostname}:${port}`);
+  console.log(formatStudioListenBanner({
+    hostname,
+    port,
+    lanAddresses: listLanIpv4Addresses(),
+  }));
   serve({ fetch: app.fetch, port, hostname });
 }

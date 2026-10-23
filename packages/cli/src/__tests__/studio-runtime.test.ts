@@ -139,4 +139,17 @@ describe("studio runtime resolution", () => {
       args: ["http://localhost:4567"],
     });
   });
+
+  it("defaults Studio bind host to the LAN", async () => {
+    const previous = process.env.INKOS_STUDIO_HOST;
+    delete process.env.INKOS_STUDIO_HOST;
+    try {
+      const { resolveStudioBindHost } = await import("../commands/studio.js");
+      expect(resolveStudioBindHost()).toBe("0.0.0.0");
+      expect(resolveStudioBindHost("127.0.0.1")).toBe("127.0.0.1");
+    } finally {
+      if (previous === undefined) delete process.env.INKOS_STUDIO_HOST;
+      else process.env.INKOS_STUDIO_HOST = previous;
+    }
+  });
 });
