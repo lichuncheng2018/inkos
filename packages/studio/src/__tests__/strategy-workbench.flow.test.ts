@@ -23,6 +23,29 @@ it("keeps explicitly configured models scoped to each custom service protocol", 
     {service:"custom:responses",models:["gpt-5.6-sol"]},
   ]);
 });
+it("uses a saved built-in snapshot as the writing picker catalog", async () => {
+  const root = await mkdtemp(join(tmpdir(), "inkos-model-snapshot-")); roots.push(root);
+  await mkdir(join(root, ".inkos"));
+  await writeFile(join(root, "inkos.json"), JSON.stringify({
+    llm: { service: "openai", defaultModel: "gpt-5.4", services: [{ service: "openai", models: ["gpt-5.4"] }] },
+  }));
+  await writeFile(join(root, ".inkos/secrets.json"), JSON.stringify({ services: { openai: { apiKey: "fixture" } } }));
+  const app = createStudioServer({} as never, root);
+  const grouped = await (await app.request("/api/v1/services/models")).json();
+  expect(grouped.groups.find((group: { service: string }) => group.service === "openai")?.models.map((model: { id: string }) => model.id)).toEqual(["gpt-5.4"]);
+  const live = await (await app.request("/api/v1/services/openai/models")).json();
+  expect(live.models.map((model: { id: string }) => model.id)).toEqual(["gpt-5.4"]);
+});
+it("falls back to the built-in bank when no model snapshot is saved", async () => {
+  const root = await mkdtemp(join(tmpdir(), "inkos-model-bank-")); roots.push(root);
+  await mkdir(join(root, ".inkos"));
+  await writeFile(join(root, "inkos.json"), JSON.stringify({ llm: { service: "openai", defaultModel: "gpt-5.4" } }));
+  await writeFile(join(root, ".inkos/secrets.json"), JSON.stringify({ services: { openai: { apiKey: "fixture" } } }));
+  const grouped = await (await createStudioServer({} as never, root).request("/api/v1/services/models")).json();
+  const ids = grouped.groups.find((group: { service: string }) => group.service === "openai")?.models.map((model: { id: string }) => model.id) ?? [];
+  expect(ids).toContain("gpt-5.4");
+  expect(ids).toContain("gpt-5.4-mini");
+});
 it("serves actual historical bytes, adopts a revision, and exposes execution and method evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "inkos-workbench-")); roots.push(root);
   const writes = [{ relativePath: "works/probe/source/probe.md", content: JSON.stringify({ version: 1 }) }];

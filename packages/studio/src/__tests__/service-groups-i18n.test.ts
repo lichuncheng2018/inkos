@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { setAppLanguage } from "../lib/app-language";
-import { getGroupDescription, getGroupLabel, getGroupShortLabel } from "../constants/service-groups";
+import { getGroupDescription, getGroupLabel, getGroupShortLabel, isListedBankService, SERVICE_LIST_GROUPS } from "../constants/service-groups";
 import { getServiceQuickLinks } from "../components/ServiceQuickLinks";
 
 // 每条用例结束后恢复默认语言，避免污染其他测试。
@@ -21,6 +21,21 @@ describe("service-groups i18n", () => {
     expect(getGroupLabel("overseas")).toBe("International providers");
     expect(getGroupShortLabel("aggregator")).toBe("Aggregator");
     expect(getGroupDescription("aggregator")).toContain("one API key");
+  });
+});
+
+describe("service list groups", () => {
+  it("only shows the china tab", () => {
+    expect(SERVICE_LIST_GROUPS).toEqual(["china"]);
+  });
+
+  it("keeps DeepSeek and hides other bank groups", () => {
+    expect(isListedBankService("deepseek", "china")).toBe(true);
+    expect(isListedBankService("moonshot", "china")).toBe(false);
+    expect(isListedBankService("openai", "overseas")).toBe(false);
+    expect(isListedBankService("kkaiapi", "aggregator")).toBe(false);
+    expect(isListedBankService("ollama", "local")).toBe(false);
+    expect(isListedBankService("kimiCodingPlan", "codingPlan")).toBe(false);
   });
 });
 

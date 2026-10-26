@@ -9,6 +9,21 @@ export const GROUP_ORDER: ReadonlyArray<EndpointGroup> = [
   "codingPlan",
 ] as const;
 
+/** 服务商管理页展示的分组 tab / 区块。 */
+export const SERVICE_LIST_GROUPS: ReadonlyArray<EndpointGroup> = ["china"];
+
+/** 服务商管理「国产原厂」只展示这些内置服务。 */
+export const LISTED_CHINA_BANK_SERVICES: ReadonlySet<string> = new Set(["deepseek"]);
+
+export function isListedBankService(
+  serviceId: string,
+  group: EndpointGroup | undefined,
+): boolean {
+  if (!group || !SERVICE_LIST_GROUPS.includes(group)) return false;
+  if (group === "china") return LISTED_CHINA_BANK_SERVICES.has(serviceId);
+  return true;
+}
+
 // 标签在渲染时通过 tr() 取值，不能在模块加载时固化成单一语言字符串，
 // 所以这里存 zh/en 对，由下方 getGroupLabel 等函数在调用时解析。
 const GROUP_LABELS: Record<EndpointGroup, { zh: string; en: string }> = {

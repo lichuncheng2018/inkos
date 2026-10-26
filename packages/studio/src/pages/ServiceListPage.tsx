@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
-import { GROUP_ORDER, getGroupDescription, getGroupLabel, getGroupShortLabel } from "../constants/service-groups";
+import { Check, Plus, Search, X } from "lucide-react";
+import { SERVICE_LIST_GROUPS, getGroupDescription, getGroupLabel, getGroupShortLabel, isListedBankService } from "../constants/service-groups";
 import { tr } from "../lib/app-language";
-import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import type { EndpointGroup, ServiceInfo } from "../store/service";
 import { ServiceQuickLinks, getServiceQuickLinks } from "../components/ServiceQuickLinks";
@@ -52,210 +51,6 @@ function ServiceCard({ svc, onClick }: { svc: ServiceInfo; onClick: () => void }
   );
 }
 
-interface CoverProviderInfo {
-  readonly service: string;
-  readonly label: string;
-  readonly baseUrl: string;
-  readonly defaultModel: string;
-  readonly models: readonly string[];
-  readonly connected: boolean;
-}
-
-interface CoverConfigPayload {
-  readonly service: string | null;
-  readonly model: string | null;
-  readonly baseUrl: string | null;
-  readonly providers: readonly CoverProviderInfo[];
-}
-
-function CoverConfigCard() {
-  const [providers, setProviders] = useState<readonly CoverProviderInfo[]>([]);
-  const [service, setService] = useState("kkaiapi");
-  const [model, setModel] = useState("gpt-image-2");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
-  const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
-  const [message, setMessage] = useState("");
-
-  const selected = providers.find((provider) => provider.service === service);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchJson<CoverConfigPayload>("/cover/config")
-      .then((payload) => {
-        if (cancelled) return;
-        setProviders(payload.providers);
-        const nextService = payload.service ?? payload.providers[0]?.service ?? "kkaiapi";
-        const provider = payload.providers.find((item) => item.service === nextService) ?? payload.providers[0];
-        setService(nextService);
-        setModel(payload.model ?? provider?.defaultModel ?? "gpt-image-2");
-        setBaseUrl(payload.baseUrl ?? "");
-        setStatus("idle");
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setStatus("error");
-        setMessage(error instanceof Error ? error.message : tr("读取封面配置失败", "Failed to load cover config"));
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!service) return;
-    let cancelled = false;
-    void fetchJson<{ apiKey?: string }>(`/cover/secret/${encodeURIComponent(service)}`)
-      .then((payload) => {
-        if (cancelled) return;
-        setApiKey(payload.apiKey ?? "");
-      })
-      .catch(() => {
-        if (!cancelled) setApiKey("");
-      });
-    return () => { cancelled = true; };
-  }, [service]);
-
-  const handleServiceChange = (nextService: string) => {
-    const provider = providers.find((item) => item.service === nextService);
-    setService(nextService);
-    setModel(provider?.defaultModel ?? "gpt-image-2");
-    setBaseUrl("");
-    setStatus("idle");
-    setMessage("");
-  };
-
-  const handleSave = async () => {
-    const provider = selected;
-    if (!provider) return;
-    setStatus("saving");
-    setMessage("");
-    try {
-      await fetchJson(`/cover/secret/${encodeURIComponent(provider.service)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      });
-      await fetchJson("/cover/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          service: provider.service,
-          model,
-          ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
-        }),
-      });
-      setStatus("saved");
-      setMessage(tr("封面配置已保存", "Cover config saved"));
-    } catch (error) {
-      setStatus("error");
-      setMessage(error instanceof Error ? error.message : tr("保存封面配置失败", "Failed to save cover config"));
-    }
-  };
-
-  if (providers.length === 0 && status !== "error") return null;
-
-  return (
-    <section className="rounded-xl border border-border/50 bg-card/50 p-4 space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium text-foreground">{tr("封面生成", "Cover generation")}</h2>
-          <p className="mt-1 text-xs text-muted-foreground/70">
-            {tr(
-              "只配置封面通道和模型；封面尺寸由短篇封面提示词和内部默认处理。",
-              "Only configures the cover provider and model; cover size is handled by the short-story cover prompt and internal defaults.",
-            )}
-          </p>
-        </div>
-        {selected?.connected && (
-          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
-            {tr("已有密钥", "Key saved")}
-          </span>
-        )}
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-2">
-        <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">{tr("服务", "Service")}</span>
-          <select
-            value={service}
-            onChange={(event) => handleServiceChange(event.target.value)}
-            className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
-          >
-            {providers.map((provider) => (
-              <option key={provider.service} value={provider.service}>{provider.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">{tr("封面模型", "Cover model")}</span>
-          <select
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
-          >
-            {(selected?.models ?? [model]).map((item) => (
-              <option key={item} value={item}>{item}</option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <label className="space-y-1.5">
-        <span className="block text-xs font-medium text-muted-foreground/70">Base URL</span>
-        <input
-          type="url"
-          value={baseUrl}
-          onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder={selected?.baseUrl ?? "https://example.com/v1"}
-          className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm font-mono"
-        />
-        <span className="block text-[11px] leading-5 text-muted-foreground/55">
-          {tr(
-            "留空使用该服务的默认地址；自定义地址会作为封面生成 API 根路径。",
-            "Leave blank to use the provider default; a custom value becomes the cover generation API root.",
-          )}
-        </span>
-      </label>
-
-      <label className="space-y-1.5">
-        <span className="block text-xs font-medium text-muted-foreground/70">API Key</span>
-        <div className="relative">
-          <input
-            type={showKey ? "text" : "password"}
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            placeholder="sk-..."
-            className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
-          />
-          <button
-            type="button"
-            onClick={() => setShowKey((value) => !value)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground"
-          >
-            {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-        </div>
-      </label>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={handleSave}
-          disabled={status === "saving" || !selected}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-        >
-          {status === "saving" && <Loader2 size={12} className="animate-spin" />}
-          {tr("保存封面配置", "Save cover config")}
-        </button>
-        {message && (
-          <span className={`text-xs ${status === "error" ? "text-destructive" : "text-emerald-500"}`}>
-            {message}
-          </span>
-        )}
-      </div>
-    </section>
-  );
-}
-
 export function ServiceListPage({ nav }: { nav: Nav }) {
   const services = useServiceStore((s) => s.services);
   const loading = useServiceStore((s) => s.servicesLoading);
@@ -269,7 +64,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
   const [onlyConnected, setOnlyConnected] = useState(false);
 
   const bankServices = useMemo(
-    () => services.filter((s) => !s.service.startsWith("custom")),
+    () => services.filter((s) => !s.service.startsWith("custom") && isListedBankService(s.service, s.group)),
     [services],
   );
   const customServices = useMemo(
@@ -279,7 +74,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
 
   const groupCounts = useMemo(() => {
     const counts = {} as Record<EndpointGroup, number>;
-    for (const group of GROUP_ORDER) {
+    for (const group of SERVICE_LIST_GROUPS) {
       counts[group] = bankServices.filter((s) => s.group === group).length;
     }
     return counts;
@@ -312,7 +107,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
 
   const byGroup = useMemo(() => {
     const map = {} as Record<EndpointGroup, ServiceInfo[]>;
-    for (const group of GROUP_ORDER) map[group] = [];
+    for (const group of SERVICE_LIST_GROUPS) map[group] = [];
     for (const svc of filtered) {
       if (svc.group) map[svc.group].push(svc);
     }
@@ -348,8 +143,6 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
 
       <ServiceConfigSourceCard onChange={() => { void refreshServices(); }} />
 
-      <CoverConfigCard />
-
       <div className="relative">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
         <input
@@ -382,7 +175,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         >
           {tr("全部", "All")} {bankServices.length}
         </button>
-        {GROUP_ORDER.map((group) => {
+        {SERVICE_LIST_GROUPS.map((group) => {
           const selected = selectedGroups.has(group);
           return (
             <button
@@ -427,7 +220,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         </div>
       )}
 
-      {!loading && GROUP_ORDER.map((group) => {
+      {!loading && SERVICE_LIST_GROUPS.map((group) => {
         const list = byGroup[group];
         if (!list || list.length === 0) return null;
         return (

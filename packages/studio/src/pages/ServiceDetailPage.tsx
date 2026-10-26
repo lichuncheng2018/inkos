@@ -41,6 +41,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const fetchServices = useServiceStore((s) => s.fetchServices);
   const refreshServices = useServiceStore((s) => s.refreshServices);
   const fetchBankModels = useServiceStore((s) => s.fetchBankModels);
+  const fetchCustomModels = useServiceStore((s) => s.fetchCustomModels);
   const setStoreModels = useServiceStore((s) => s.setLiveModels);
   const clearStoreModels = useServiceStore((s) => s.clearModels);
 
@@ -93,7 +94,6 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const resolvedCustomName = persistedCustomName || customName.trim() || "Custom";
   const effectiveServiceId = isCustom ? `custom:${resolvedCustomName}` : serviceId;
   const label = isCustom ? (customName || persistedCustomName || tr("自定义服务", "Custom service")) : (svc?.label ?? serviceId);
-  const storeModels = useServiceStore((s) => s.modelsByService[effectiveServiceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +138,6 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const models = mergeServiceDetailModels(
     configuredModels,
     status.state === "connected" ? status.models : undefined,
-    storeModels,
   );
   const hasModelCatalog = models.length > 0 || status.state === "connected";
   const isBusy = status.state === "testing" || status.state === "saving";
@@ -168,27 +167,26 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       });
       if (result.ok) {
         const models = result.models ?? [];
-        const verifiedApiFormat = result.detected?.apiFormat ?? apiFormat;
+        const verifiedApiFormat = apiFormat;
         const verifiedStream = typeof result.detected?.stream === "boolean" ? result.detected.stream : stream;
         const verifiedBaseUrl = isCustom ? (result.detected?.baseUrl ?? baseUrl.trim()) : "";
-        if (result.detected?.apiFormat) setApiFormat(result.detected.apiFormat);
         if (typeof result.detected?.stream === "boolean") setStream(result.detected.stream);
         if (isCustom && result.detected?.baseUrl) setBaseUrl(result.detected.baseUrl);
         setDetectedModel(result.selectedModel ?? "");
         setDetectedConfig(result.detected ?? null);
+        const mergedModels = mergeServiceDetailModels(configuredModels, preferredModel ? [preferredModel] : undefined, models);
+        setConfiguredModels(mergedModels);
         setVerifiedProbe({
           apiKey: trimmedKey,
           baseUrl: verifiedBaseUrl,
           apiFormat: verifiedApiFormat,
           stream: verifiedStream,
-          models,
+          models: mergedModels,
           selectedModel: result.selectedModel,
           detected: result.detected,
         });
-        const mergedModels = mergeServiceDetailModels(configuredModels, preferredModel ? [preferredModel] : undefined, models);
-        setConfiguredModels(mergedModels);
         setStatus({ state: "connected", models: mergedModels });
-        setStoreModels(effectiveServiceId, mergedModels); // Write to global store
+        setStoreModels(effectiveServiceId, mergedModels);
       } else {
         setVerifiedProbe(null);
         setStatus({ state: "error", message: result.error ?? tr("连接失败", "Connection failed") });
@@ -238,7 +236,6 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         verifiedProbe,
       });
       if (result.status.state === "connected") {
-        if (result.detectedConfig?.apiFormat) setApiFormat(result.detectedConfig.apiFormat);
         if (typeof result.detectedConfig?.stream === "boolean") setStream(result.detectedConfig.stream);
         if (isCustom && result.detectedConfig?.baseUrl) setBaseUrl(result.detectedConfig.baseUrl);
         setDetectedModel(result.detectedModel);
@@ -256,25 +253,28 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       }
       await refreshServices();
       await fetchBankModels();
+      await fetchCustomModels();
     } catch (e) {
       setStatus({ state: "error", message: e instanceof Error ? e.message : tr("保存失败", "Save failed") });
     }
   };
 
+  const applyCatalog = (next: ModelInfo[]) => {
+    setConfiguredModels(next);
+    setStoreModels(effectiveServiceId, next);
+    setVerifiedProbe((current) => (current ? { ...current, models: next } : current));
+    if (status.state === "connected") setStatus({ state: "connected", models: next });
+  };
+
   const handleAddModel = () => {
     const next = mergeServiceDetailModels(configuredModels, [modelIdInput]);
     if (next.length === configuredModels.length) return;
-    setConfiguredModels(next);
-    setStoreModels(effectiveServiceId, next);
-    if (status.state === "connected") setStatus({ state: "connected", models: next });
+    applyCatalog(next);
     setModelIdInput("");
   };
 
   const handleRemoveModel = (modelId: string) => {
-    const next = models.filter((model) => model.id.toLowerCase() !== modelId.toLowerCase());
-    setConfiguredModels(next);
-    setStoreModels(effectiveServiceId, next);
-    if (status.state === "connected") setStatus({ state: "connected", models: next });
+    applyCatalog(models.filter((model) => model.id.toLowerCase() !== modelId.toLowerCase()));
   };
 
   return (

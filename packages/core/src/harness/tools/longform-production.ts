@@ -46,6 +46,28 @@ const WriteChaptersParams = Type.Object({
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
+export async function resolveWriteNextToolParameters(input: {
+  readonly projectRoot: string;
+  readonly bookId: string;
+  readonly instruction: string;
+  readonly chapterCount?: number;
+  readonly chapterWordCount?: number;
+}): Promise<{
+  readonly instruction: string;
+  readonly bookId: string;
+  readonly startChapterNumber: number;
+  readonly chapterCount: number;
+  readonly chapterWordCount?: number;
+}> {
+  return {
+    instruction: input.instruction,
+    bookId: input.bookId,
+    startChapterNumber: await new StateManager(input.projectRoot).getNextChapterNumber(input.bookId),
+    chapterCount: input.chapterCount ?? 1,
+    ...(input.chapterWordCount !== undefined ? { chapterWordCount: input.chapterWordCount } : {}),
+  };
+}
+
 const ReviewChapterParams = Type.Object({
   bookId: Type.Optional(Type.String()),
   chapterNumber: Type.Optional(Type.Integer({ minimum: 1 })),

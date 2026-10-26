@@ -336,8 +336,10 @@ describe("guardedPiNonStreaming", () => {
   it('assembles indexed character documents while preserving quoted character prose',async()=>{
     const card='An adult clerk says "Wait."\nThe witness keeps the original receipt.';
     const called:string[]=[];
+    const outlineTokens:number[]=[];
     fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
       const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;called.push(name);
+      if(name==='submit_foundation_outline')outlineTokens.push(body.max_tokens);
       const args=name==='submit_foundation_outline'?{storyFrame:'Evidence conflict',volumeMap:'One resolved chapter'}:
         name==='submit_foundation_details'?{bookRules:'Keep the receipt',bookRulesData:{prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]},pendingHooks:[]}:
         name==='submit_foundation_cast_index'?{roles:[{tier:'major',name:'Mara'},{tier:'minor',name:'Witness'}]}:
@@ -347,6 +349,7 @@ describe("guardedPiNonStreaming", () => {
     const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
     const result=await new ArchitectAgent({client,model:model.id,projectRoot:'/tmp'}).generateFoundation({id:'fixture',title:'Receipt',genre:'other',platform:'other',language:'en',status:'outlining',targetChapters:1,chapterWordCount:300,createdAt:'2026-01-01',updatedAt:'2026-01-01'});
     expect(called).toEqual(['submit_foundation_outline','submit_foundation_details','submit_foundation_cast_index','submit_foundation_cast_documents']);
+    expect(outlineTokens).toEqual([client.defaults.maxTokens]);
     expect(result.roles).toEqual([{tier:'major',name:'Mara',content:card},{tier:'minor',name:'Witness',content:'Knows who signed the receipt.'}]);
   });
   it('preserves improving candidates without accepting them and completes only the invalid chapter',async()=>{
@@ -716,5 +719,33 @@ describe("guardedPiNonStreaming", () => {
     }] }).result();
     const continuation = JSON.parse(fetchWithProxyMock.mock.calls[1]![1].body);
     expect(continuation.messages.find((message: {role: string}) => message.role === "assistant").reasoning_content).toBe("Provider planning state");
+  });
+
+  it("disables thinking on the official deepseek-flash id", async () => {
+    fetchWithProxyMock.mockResolvedValue(new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "tool_calls",
+        message: {
+          content: "ok",
+          tool_calls: [{
+            id: "call-flash",
+            type: "function",
+            function: { name: "workspace__propose_action", arguments: JSON.stringify({ action: "short_run" }) },
+          }],
+        },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const flashModel = { ...model, id: "deepseek-flash", reasoning: false };
+    await guardedPiNonStreaming(flashModel, {
+      messages: [{ role: "user", content: "Create a short.", timestamp: 1 }],
+      tools: [{ name: "workspace__propose_action", description: "Propose", parameters: Type.Object({}) }],
+    }, { apiKey: "test-key", maxTokens: 2048 }).result();
+    const payload = JSON.parse(String((fetchWithProxyMock.mock.calls[0] as [string, RequestInit])[1].body)) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      model: "deepseek-flash",
+      thinking: { type: "disabled" },
+      max_tokens: 2048,
+    });
+    expect(payload.max_completion_tokens).toBeUndefined();
   });
 });

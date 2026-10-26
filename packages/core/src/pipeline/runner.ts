@@ -5,6 +5,7 @@ import {changedSourceRegion} from '../utils/source-text.js';
 import {createBuiltInWorkProfileRegistry} from "../harness/builtin-profiles.js";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { createLLMClient } from "../llm/provider.js";
+import { resolveAgentModelOverride } from "../llm/model-override.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
@@ -360,47 +361,21 @@ export class PipelineRunner {
     if (!override) {
       return { model: this.config.model, client: this.config.client };
     }
-    if (typeof override === "string") {
-      return { model: override, client: this.config.client };
+    const resolved = resolveAgentModelOverride({
+      override,
+      llm: this.config.defaultLLMConfig,
+      projectRoot: this.config.projectRoot,
+    });
+    if (resolved.reuseDefaultClient || !resolved.clientConfig) {
+      return { model: resolved.model, client: this.config.client };
     }
-    // Full override — needs its own client if baseUrl differs
-    if (!override.baseUrl) {
-      return { model: override.model, client: this.config.client };
-    }
-    const base = this.config.defaultLLMConfig;
-    const provider = override.provider ?? base?.provider ?? "custom";
-    const apiKeySource = override.apiKeyEnv
-      ? `env:${override.apiKeyEnv}`
-      : `base:${base?.apiKey ?? ""}`;
-    const stream = override.stream ?? base?.stream ?? true;
-    const apiFormat = base?.apiFormat ?? "chat";
-    const cacheKey = [
-      provider,
-      override.baseUrl,
-      apiKeySource,
-      `stream:${stream}`,
-      `format:${apiFormat}`,
-    ].join("|");
+    const cacheKey = resolved.cacheKey ?? resolved.model;
     let client = this.agentClients.get(cacheKey);
     if (!client) {
-      const apiKey = override.apiKeyEnv
-        ? process.env[override.apiKeyEnv] ?? ""
-        : base?.apiKey ?? "";
-      client = createLLMClient({
-        provider,
-        service: base?.service ?? "custom",
-        configSource: base?.configSource ?? "env",
-        baseUrl: override.baseUrl,
-        apiKey,
-        model: override.model,
-        temperature: base?.temperature ?? 0.7,
-        thinkingBudget: base?.thinkingBudget ?? 0,
-        apiFormat,
-        stream,
-      });
+      client = createLLMClient(resolved.clientConfig);
       this.agentClients.set(cacheKey, client);
     }
-    return { model: override.model, client };
+    return { model: resolved.model, client };
   }
 
   private agentCtxFor(agent: string, bookId?: string): AgentContext {

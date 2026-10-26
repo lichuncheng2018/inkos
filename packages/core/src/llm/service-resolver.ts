@@ -1,12 +1,12 @@
 import { getModel } from "@mariozechner/pi-ai";
 import type { Model, Api } from "@mariozechner/pi-ai";
-import { resolveServicePiProvider, resolveServicePreset } from "./service-presets.js";
+import { resolveRuntimePiProvider, resolveServicePreset } from "./service-presets.js";
 import { getServiceApiKey } from "./secrets.js";
 import { getEndpoint } from "./providers/index.js";
-import { lookupModel } from "./providers/lookup.js";
+import { applyModelTokenLimits, lookupModel, UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW } from "./providers/lookup.js";
 import type { InkosEndpoint } from "./providers/types.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
-import { toPiApi, type LLMApiFormat } from "./api-format.js";
+import { resolveTransportApi, type LLMApiFormat } from "./api-format.js";
 
 export interface ResolvedModel {
   model: Model<Api>;
@@ -45,14 +45,8 @@ export async function resolveServiceModel(
   const baseService = service.startsWith("custom:") ? "custom" : service;
   const preset = resolveServicePreset(baseService);
   const endpoint = getEndpoint(baseService);
-  const piProvider = baseService === "ollama"
-    ? "ollama"
-    : service.startsWith("custom:") && customApiFormat === "anthropic"
-      ? "anthropic"
-      : resolveServicePiProvider(baseService) ?? "openai";
-  const apiType = service.startsWith("custom:")
-    ? toPiApi(customApiFormat ?? "chat")
-    : (preset?.api ?? "openai-completions");
+  const apiType = resolveTransportApi(service, customApiFormat, preset?.api);
+  const piProvider = resolveRuntimePiProvider(service, apiType);
   const configuredBaseUrl = customBaseUrl ?? preset?.baseUrl ?? "";
   const endpointModel = lookupModel(baseService, modelId);
 
@@ -85,8 +79,11 @@ export async function resolveServiceModel(
     reasoning: piModel?.reasoning ?? false,
     input: piModel?.input ?? ["text"] as ("text" | "image")[],
     cost: piModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: endpointModel?.contextWindowTokens ?? piModel?.contextWindow ?? 0,
-    maxTokens: endpointModel?.maxOutput ?? piModel?.maxTokens ?? 16384,
+    ...applyModelTokenLimits(
+      modelId,
+      endpointModel?.maxOutput ?? piModel?.maxTokens ?? 16384,
+      endpointModel?.contextWindowTokens ?? piModel?.contextWindow ?? UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW,
+    ),
     ...(compat ? { compat: compat as Model<Api>["compat"] } : {}),
   };
 

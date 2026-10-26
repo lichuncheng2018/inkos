@@ -22,6 +22,7 @@ import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "../llm/agent-trajectory.js";
+import { isDeepSeekV4WireCompatId } from "../llm/providers/lookup.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 
 /**
@@ -56,7 +57,7 @@ export function guardedPiStream<TApi extends Api>(
     model,
     (signal) => streamSimple(model, context, {
       ...options,
-      headers: { ...(options?.headers ?? {}), ...traceHeaders },
+      headers: { ...(model.headers ?? {}), ...(options?.headers ?? {}), ...traceHeaders },
       onPayload: async (payload, activeModel) => {
         let configured = explicitDeepSeekThinkingMode(payload, activeModel);
         const choice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
@@ -190,6 +191,13 @@ function missingRequiredTool(message: AssistantMessage, choice: unknown): boolea
   return !message.content.some(part => part.type === "toolCall" && (!name || part.name === name));
 }
 
+function completeProseAnswer(message: AssistantMessage, choice: unknown): boolean {
+  // Any-tool `required` may end on a finished user-facing answer. A named
+  // function choice still requires that specific tool.
+  if (choice !== "required") return false;
+  return message.content.some(part => part.type === "text" && part.text.trim().length > 0);
+}
+
 function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   let started = false;
@@ -230,7 +238,8 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
           return;
         }
         if (event.type === "done" && event.message.stopReason !== "length"
-          && !discardedToolOutputs.has(event.message) && missingRequiredTool(event.message, toolChoice)) {
+          && !discardedToolOutputs.has(event.message) && missingRequiredTool(event.message, toolChoice)
+          && !completeProseAnswer(event.message, toolChoice)) {
           recordExecutionEvidence("model-call-completed", { modelCallId, status: "invalid_tool_choice", response: event.message });
           if (retry) {
             recordExecutionEvidence("model-call-retry", { modelCallId, reason: "MODEL_REQUIRED_TOOL_MISSING" });
@@ -280,7 +289,7 @@ function emptyAssistantMessage(model: Model<Api>): AssistantMessage {
 }
 
 function explicitDeepSeekThinkingMode(payload: unknown, model: Model<Api>): unknown {
-  if (!model.id.toLowerCase().startsWith("deepseek-v4-") || !payload || typeof payload !== "object") return payload;
+  if (!isDeepSeekV4WireCompatId(model.id) || !payload || typeof payload !== "object") return payload;
   // V4 enables high-effort thinking when the field is absent. Match the
   // configured mode explicitly, including through OpenAI-compatible gateways.
   const body = { ...payload, thinking: { type: model.reasoning ? "enabled" : "disabled" } } as Record<string, unknown>;

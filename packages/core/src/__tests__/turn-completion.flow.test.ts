@@ -60,29 +60,29 @@ it("answers a question, rejects an unevidenced delivery, creates a Work and rest
   }
 }, 20000);
 
-it("keeps a nonterminal provider response out of the completed answer after the bounded protocol retry", async () => {
-  const root = await mkdtemp(join(tmpdir(), "inkos-missing-completion-"));
+it("keeps a complete prose answer as the turn result without a finish_turn call", async () => {
+  const root = await mkdtemp(join(tmpdir(), "inkos-prose-completion-"));
   let calls = 0;
   const upstream = createServer(async (request, response) => {
     for await (const _chunk of request) {}
     calls++;
     response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "I will do the work." } }] }));
+    response.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Mid-grade stones are 100 low-grade." } }] }));
   });
   upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
   try {
-    const result = await runAgentSession({ projectRoot: root, sessionId: "missing", bookId: null, language: "en", apiKey: "fixture", stream: false, pipeline: {} as never,
+    const result = await runAgentSession({ projectRoot: root, sessionId: "prose", bookId: null, language: "en", apiKey: "fixture", stream: false, pipeline: {} as never,
       model: { id: "fixture", name: "Fixture", provider: "openai", api: "openai-completions", baseUrl: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1`, reasoning: false,
         input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-    }, "Create an empty script Work.");
-    expect(calls).toBe(2);
-    expect(result.errorMessage).toBeTruthy();
-    expect(result.responseText).toBe("");
-    expect(result.completion).toBeUndefined();
-    expect((await readTranscriptEvents(root, "missing")).at(-1)?.type).toBe("request_failed");
+    }, "How does currency convert?");
+    expect(calls).toBe(1);
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.responseText).toBe("Mid-grade stones are 100 low-grade.");
+    expect(result.completion).toMatchObject({ status: "answered", message: "Mid-grade stones are 100 low-grade." });
+    expect((await readTranscriptEvents(root, "prose")).at(-1)?.type).toBe("request_committed");
     expect(await listWorkManifests(root)).toHaveLength(0);
   } finally {
-    abortAgentSession(root, "missing");
+    abortAgentSession(root, "prose");
     upstream.closeAllConnections(); await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
   }

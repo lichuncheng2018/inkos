@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -14,21 +15,53 @@ const SecretsFileSchema = z.object({
 const SECRETS_DIR = ".inkos";
 const SECRETS_FILE = "secrets.json";
 
+function secretsPath(projectRoot: string): string {
+  return join(projectRoot, SECRETS_DIR, SECRETS_FILE);
+}
+
+function emptySecrets(): SecretsFile {
+  return { services: {} };
+}
+
+function parseSecretsRaw(raw: string): SecretsFile {
+  return SecretsFileSchema.parse(JSON.parse(raw));
+}
+
+function isMissingSecretsFile(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function envNameForService(service: string): string {
+  return `${service.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
+}
+
+function keyFromSecretsOrEnv(secrets: SecretsFile, service: string): string | null {
+  const entry = secrets.services[service];
+  if (entry?.apiKey) return entry.apiKey;
+  const fromEnv = process.env[envNameForService(service)];
+  return fromEnv || null;
+}
+
 async function readSecretsRaw(projectRoot: string): Promise<SecretsFile> {
   try {
-    const raw = await readFile(
-      join(projectRoot, SECRETS_DIR, SECRETS_FILE),
-      "utf-8",
-    );
-    return SecretsFileSchema.parse(JSON.parse(raw));
+    return parseSecretsRaw(await readFile(secretsPath(projectRoot), "utf-8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { services: {} };
+    if (isMissingSecretsFile(error)) return emptySecrets();
     throw error;
   }
 }
 
 export async function loadSecrets(projectRoot: string): Promise<SecretsFile> {
   return readSecretsRaw(projectRoot);
+}
+
+export function loadSecretsSync(projectRoot: string): SecretsFile {
+  try {
+    return parseSecretsRaw(readFileSync(secretsPath(projectRoot), "utf-8"));
+  } catch (error) {
+    if (isMissingSecretsFile(error)) return emptySecrets();
+    throw error;
+  }
 }
 
 export async function saveSecrets(
@@ -49,14 +82,12 @@ export async function getServiceApiKey(
   projectRoot: string,
   service: string,
 ): Promise<string | null> {
-  // 1. secrets.json
-  const secrets = await loadSecrets(projectRoot);
-  const entry = secrets.services[service];
-  if (entry?.apiKey) return entry.apiKey;
+  return keyFromSecretsOrEnv(await loadSecrets(projectRoot), service);
+}
 
-  // 2. Environment variable: MOONSHOT_API_KEY, DEEPSEEK_API_KEY, etc.
-  const envKey = `${service.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
-  if (process.env[envKey]) return process.env[envKey]!;
-
-  return null;
+export function getServiceApiKeySync(
+  projectRoot: string,
+  service: string,
+): string | null {
+  return keyFromSecretsOrEnv(loadSecretsSync(projectRoot), service);
 }

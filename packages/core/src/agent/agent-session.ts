@@ -35,6 +35,7 @@ import {
   type ActionResult,
   renderActionResultForAgent,
 } from "../harness/index.js";
+import { advertisedContextWindow, applyModelTokenLimits } from "../llm/providers/lookup.js";
 import {
   appendTranscriptEvents,
   readTranscriptEvents,
@@ -539,6 +540,15 @@ function extractTextFromAssistant(msg: AssistantMessage): string {
     .join("");
 }
 
+function inferredAnswerCompletion(message: AssistantMessage | undefined): TurnCompletion | undefined {
+  if (!message || message.stopReason === "error" || message.stopReason === "aborted" || message.stopReason === "length") {
+    return undefined;
+  }
+  const text = extractTextFromAssistant(message).trim();
+  if (!text) return undefined;
+  return { status: "answered", message: text };
+}
+
 function lastAssistantMessage(messages: AgentMessage[]): AssistantMessage | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -603,8 +613,7 @@ export async function compileHarnessContextText(input: {
   readonly signal?: AbortSignal;
 }): Promise<string> {
   const outputBudget = Math.min(input.maxTokens, 4096);
-  const contextWindow = Number.isFinite(input.model.contextWindow) && input.model.contextWindow > 0
-    ? input.model.contextWindow : 32_000;
+  const contextWindow = advertisedContextWindow(input.model.contextWindow);
   const inputBudget = Math.max(256, contextWindow - outputBudget - estimateTextTokens(input.systemPrompt) - 2048);
   const chunks = splitTextByEstimatedTokens(input.userPrompt, inputBudget);
   if (chunks.length > 1) {
@@ -724,17 +733,22 @@ function isHostConfirmedAction(
   );
 }
 
-function agentOutputBudget(model: Model<Api>): number {
-  return Math.min(8192, typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : 4096);
+const AGENT_INPUT_RESERVE_TOKENS = 8_192;
+
+export function agentOutputBudget(model: Model<Api>): number {
+  const advertised = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : 4096;
+  const limits = applyModelTokenLimits(model.id, advertised, advertisedContextWindow(model.contextWindow));
+  const transportOverhead = Math.max(2048, Math.floor(limits.contextWindow * 0.05));
+  const room = Math.max(4096, limits.contextWindow - transportOverhead - AGENT_INPUT_RESERVE_TOKENS);
+  return Math.min(limits.maxTokens, room);
 }
 
-function agentContextBudget(model: Model<Api>): number {
-  const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
-    ? model.contextWindow
-    : 32_000;
+export function agentContextBudget(model: Model<Api>): number {
+  const advertisedMax = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : 4096;
+  const limits = applyModelTokenLimits(model.id, advertisedMax, advertisedContextWindow(model.contextWindow));
   const reservedOutput = agentOutputBudget(model);
-  const transportOverhead = Math.max(2048, Math.floor(contextWindow * 0.05));
-  return Math.max(2000, contextWindow - reservedOutput - transportOverhead);
+  const transportOverhead = Math.max(2048, Math.floor(limits.contextWindow * 0.05));
+  return Math.max(AGENT_INPUT_RESERVE_TOKENS, limits.contextWindow - reservedOutput - transportOverhead);
 }
 
 function isAbortLike(error: unknown): boolean {
@@ -1378,6 +1392,7 @@ async function runAgentSessionUnlocked(
       )
     ));
     const turnAborted = finalAssistant?.stopReason === "aborted";
+    cached.turnCompletion ??= inferredAnswerCompletion(finalAssistant);
     const completion = currentTurnCompletion(cached);
     const turnMessages = agent.state.messages.slice(turnMessageStartIndex);
     errorMessage = assistantErrorMessage(finalAssistant)
@@ -1432,10 +1447,11 @@ async function runAgentSessionUnlocked(
   // ----- Extract result -----
   const allMessages = agent.state.messages;
   finalAssistant ??= lastAssistantMessage(allMessages);
+  errorMessage ??= assistantErrorMessage(finalAssistant);
+  cached.turnCompletion ??= inferredAnswerCompletion(finalAssistant);
   const completion = cached.completedPlayScene !== undefined
     ? { status: "delivered" as const, message: cached.completedPlayScene }
     : currentTurnCompletion(cached);
-  errorMessage ??= assistantErrorMessage(finalAssistant);
   const responseText = errorMessage ? "" : cached.completedPlayScene ?? completion?.message ?? (finalAssistant ? extractTextFromAssistant(finalAssistant) : "");
 
   return {

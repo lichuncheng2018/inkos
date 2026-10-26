@@ -29,7 +29,7 @@ export const LLMConfigSchema = z.object({
   thinkingBudget: z.number().int().min(0).default(0),
   extra: z.record(z.unknown()).optional(),
   headers: z.record(z.string()).optional(),
-  apiFormat: z.enum(LLM_API_FORMATS).default("chat"),
+  apiFormat: z.enum(LLM_API_FORMATS).optional(),
   stream: z.boolean().default(true),
   services: z.array(LLMServiceEntrySchema).optional(),
   defaultModel: z.string().min(1).optional(),
@@ -77,8 +77,10 @@ export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;
 
 export const AgentLLMOverrideSchema = z.object({
   model: z.string().min(1),
+  service: z.string().min(1).optional(),
   provider: z.enum(["anthropic", "openai", "custom"]).optional(),
   baseUrl: z.string().url().optional(),
+  apiFormat: z.enum(LLM_API_FORMATS).optional(),
   apiKeyEnv: z.string().optional(),
   stream: z.boolean().optional(),
 }).strict();

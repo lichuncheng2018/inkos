@@ -90,7 +90,7 @@ function hasModel(models: ReadonlyArray<ChatPageModelInfo>, modelId: string): bo
 }
 
 /**
- * Build the writing-page model picker groups from the saved snapshot ∪ bank.
+ * Build the writing-page model picker groups from the saved per-service snapshot.
  * The configured global default is injected even when it is missing from that
  * catalog, so setting it in project settings still makes the model selectable.
  */

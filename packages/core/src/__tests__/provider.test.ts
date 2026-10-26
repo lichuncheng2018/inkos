@@ -198,6 +198,21 @@ describe("chatCompletion via pi-ai", () => {
     expect(error.message).not.toMatch(/kkaiapi/i);
   });
 
+  it("wraps DashScope output inspection as an upstream filter, not a param error", async () => {
+    mockStreamSimple.mockReturnValue(
+      makeErrorStream("<400> InternalError.Algo.DataInspectionFailed: Output data may contain inappropriate content."),
+    );
+
+    const client = makeClient();
+    const error = await captureError(
+      chatCompletion(client, "test-model", [{ role: "user", content: "ping" }]),
+    );
+
+    expect(error.message).toContain("上游内容安全审核拦截");
+    expect(error.message).toContain("DataInspectionFailed");
+    expect(error.message).not.toContain("请求参数错误");
+  });
+
   it("wraps 401 errors with an unauthorized message", async () => {
     mockStreamSimple.mockReturnValue(makeErrorStream("401 Unauthorized"));
 
@@ -1071,6 +1086,41 @@ describe("createLLMClient with providers lookup", () => {
     expect(client._piModel?.contextWindow).toBe(1_000_000);
   });
 
+  it("built-in 百炼 follows the selected OpenAI protocol instead of the Anthropic preset", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "anthropic",
+      service: "bailian",
+      model: "qwen-turbo",
+      apiKey: "test",
+      baseUrl: "https://dashscope.aliyuncs.com/apps/anthropic",
+      apiFormat: "chat",
+    }));
+
+    expect(client.apiFormat).toBe("chat");
+    expect(client.provider).toBe("openai");
+    expect(client._piModel?.api).toBe("openai-completions");
+    expect(client._piModel?.provider).toBe("openai");
+  });
+
+  it("named custom Anthropic Messages config selects the native transport", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "custom",
+      service: "custom:启德流",
+      model: "claude-sonnet-5",
+      apiKey: "test",
+      baseUrl: "https://756777.xyz",
+      apiFormat: "anthropic",
+    }));
+
+    expect(client.provider).toBe("anthropic");
+    expect(client._piModel?.api).toBe("anthropic-messages");
+    expect(client._piModel?.provider).toBe("anthropic");
+  });
+
   it("custom Anthropic Messages config selects the existing native transport", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");
@@ -1098,11 +1148,82 @@ describe("createLLMClient with providers lookup", () => {
       apiKey: "test",
       baseUrl: "https://middleman.example/v1",
     }));
-    // lobe 数据里 gpt-4o maxOutput=4096
-    expect(client.defaults.maxTokens).toBe(4096);
+    expect(client.defaults.maxTokens).toBe(32_768);
   });
 
-  it("未知 model 走 8192 * 3 的写作兜底预算", async () => {
+  it("百炼请求带上 DashScope 内容审核 disable 头", async () => {
+    const { createLLMClient, DASHSCOPE_DISABLE_INSPECTION } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "anthropic",
+      service: "bailian",
+      model: "qwen-max",
+      apiKey: "test",
+      baseUrl: "https://dashscope.aliyuncs.com/apps/anthropic",
+    }));
+    expect(client._piModel?.headers?.["X-DashScope-DataInspection"]).toBe(DASHSCOPE_DISABLE_INSPECTION);
+  });
+
+  it("自定义 DashScope 地址同样带审核 disable 头，用户头可覆盖", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "openai",
+      service: "custom",
+      model: "qwen-max",
+      apiKey: "test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      headers: { "X-DashScope-DataInspection": '{"input":"enable","output":"enable"}' },
+    }));
+    expect(client._piModel?.headers?.["X-DashScope-DataInspection"]).toBe('{"input":"enable","output":"enable"}');
+  });
+
+  it("xAI Grok 不附加百炼审核头", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "openai",
+      service: "xai",
+      model: "grok-4",
+      apiKey: "test",
+      baseUrl: "https://api.x.ai/v1",
+    }));
+    expect(client._piModel?.headers?.["X-DashScope-DataInspection"]).toBeUndefined();
+  });
+
+  it("百炼 DeepSeek V4.1 别名使用官方 393216 输出上限", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "anthropic",
+      service: "bailian",
+      model: "deepseek-v4.1-flash",
+      apiKey: "test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }));
+    expect(client.defaults.maxTokens).toBe(393_216);
+    expect(client._piModel?.maxTokens).toBe(393_216);
+    expect(client._piModel?.contextWindow).toBe(1_000_000);
+  });
+
+  it("任意 DeepSeek 模型 id 都拉到官方 V4 输出上限", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    for (const model of ["deepseek-v3.2", "vanchin/deepseek-r1", "deepseek-chat"]) {
+      const client = createLLMClient(LLMConfigSchema.parse({
+        provider: "openai",
+        service: "custom",
+        model,
+        apiKey: "test",
+        baseUrl: "https://middleman.example/v1",
+      }));
+      expect(client.defaults.maxTokens, model).toBe(393_216);
+      expect(client._piModel?.maxTokens, model).toBe(393_216);
+      expect(client._piModel?.contextWindow, model).toBe(1_000_000);
+    }
+  });
+
+  it("未知 model 走 32768 输出下限", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");
     const client = createLLMClient(LLMConfigSchema.parse({
@@ -1112,8 +1233,8 @@ describe("createLLMClient with providers lookup", () => {
       apiKey: "test",
       baseUrl: "https://middleman.example/v1",
     }));
-    expect(client.defaults.maxTokens).toBe(24_576);
-    expect(client._piModel?.maxTokens).toBe(24_576);
+    expect(client.defaults.maxTokens).toBe(32_768);
+    expect(client._piModel?.maxTokens).toBe(32_768);
   });
 
   it("B7: kimiCodingPlan 的 kimi-k2.5 走 API 时 piModel.id 是 deploymentName (k2p5)", async () => {

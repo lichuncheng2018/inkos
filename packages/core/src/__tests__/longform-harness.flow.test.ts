@@ -19,7 +19,8 @@ import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
 import {loadChaptersFromPath} from '../agent/chapter-import-source.js';
-import {createWriteChaptersTool} from '../harness/tools/longform-production.js';
+import {createWriteChaptersTool, resolveWriteNextToolParameters} from '../harness/tools/longform-production.js';
+import {executeExplicitCapabilityTool} from '../harness/explicit-action.js';
 import {actionFailureFacts} from '../harness/action-observation.js';
 import {buildExportArtifact} from '../interaction/export-artifact.js';
 import {ContinuityAuditor} from '../agents/continuity.js';
@@ -68,6 +69,45 @@ describe("long-form harness mini-flow", () => {
     expect((await loadRuntimeStateSnapshot(bookDir)).manifest.lastAppliedChapter).toBe(1);
     expect(await state.getNextChapterNumber(id)).toBe(2);
   },20000);
+
+  it("fills startChapterNumber for host write-next and rejects the confirmed action without it", async () => {
+    const root = await tempRoot();
+    const id = "next";
+    const state = new StateManager(root);
+    await saveWorkManifest(root, createWorkManifest({ id, title: "Next", profileId: "longform-novel", language: "en" }));
+    const now = new Date().toISOString();
+    await state.saveBookConfig(id, {
+      id, title: "Next", genre: "general", platform: "other", status: "active",
+      targetChapters: 3, chapterWordCount: 10, language: "en", createdAt: now, updatedAt: now,
+    });
+    await createInitialRuntimeState({ bookDir: state.bookDir(id), language: "en" });
+    const client = createLLMClient({
+      service: "custom", provider: "openai", configSource: "studio", model: "fixture",
+      apiKey: "fixture", baseUrl: "http://127.0.0.1:1/v1", apiFormat: "chat", stream: false, thinkingBudget: 0, temperature: 0,
+    });
+    const pipeline = new PipelineRunner({ projectRoot: root, client, model: "fixture" });
+    const hostWriteNext = {
+      projectRoot: root,
+      binding: { capabilityId: "longform" as const, actionId: "write_chapters", profileId: "longform-novel" as const, risk: "recoverable-write" as const },
+      tool: createWriteChaptersTool(pipeline, id),
+      workId: id,
+    };
+
+    await expect(executeExplicitCapabilityTool({
+      ...hostWriteNext,
+      parameters: { instruction: "Write the next chapter.", bookId: id, chapterCount: 1 },
+    })).rejects.toThrow(/decode|startChapterNumber/i);
+
+    const parameters = await resolveWriteNextToolParameters({
+      projectRoot: root, bookId: id, instruction: "Write the next chapter.",
+    });
+    expect(parameters).toEqual({
+      instruction: "Write the next chapter.",
+      bookId: id,
+      startChapterNumber: 1,
+      chapterCount: 1,
+    });
+  });
 
   it('reviews and replays an imported chapter without replanning its story or advancing its state twice',async()=>{
     const root=await tempRoot();

@@ -72,6 +72,7 @@ export {
   createBookFoundationTool,
   createFoundationRevisionTool,
   createWriteChaptersTool,
+  resolveWriteNextToolParameters,
   createReviewChapterTool,
   createReviseChapterTool,
   createGenerateStyleGuideTool,

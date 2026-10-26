@@ -8,6 +8,7 @@ import { setProjectChatSessionId } from "../pages/chat-page-state";
 import { useChatStore } from "../store/chat";
 import type { ChatRequestedIntent } from "../store/chat/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { quoteSessionTitle } from "./session-label";
 import {
   Dialog,
   DialogContent,
@@ -704,8 +705,8 @@ export function Sidebar({ nav, activePage, sse, t }: {
         open={deleteTarget !== null}
         title={tr("删除会话", "Delete Session")}
         message={tr(
-          `确认删除“${deleteTarget?.title ?? ""}”吗？该操作只删除这条会话，不影响书籍内容。`,
-          `Delete "${deleteTarget?.title ?? ""}"? This only removes the session; the book content is not affected.`,
+          `确认删除“${quoteSessionTitle(deleteTarget?.title ?? "")}”吗？该操作只删除这条会话，不影响书籍内容。`,
+          `Delete "${quoteSessionTitle(deleteTarget?.title ?? "")}"? This only removes the session; the book content is not affected.`,
         )}
         confirmLabel={tr("删除", "Delete")}
         cancelLabel={tr("取消", "Cancel")}

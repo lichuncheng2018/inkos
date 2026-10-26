@@ -28,8 +28,8 @@ export function mergeServiceDetailModels(
 
 /**
  * Decide which model ids to persist as the writing-picker snapshot.
- * The on-screen catalog (test results + manual adds) is the contract:
- * a later bank-only fallback must not replace a richer list the user already saw.
+ * The on-screen catalog (test results, manual adds, and removals) is the contract.
+ * Probe results only fill an empty screen; they must not restore models the user closed.
  */
 export function resolveModelsToPersist(args: {
   readonly displayedModels?: ReadonlyArray<ServiceDetailModelInfo | string>;
@@ -38,14 +38,17 @@ export function resolveModelsToPersist(args: {
 }): ServiceDetailModelInfo[] {
   const displayed = mergeServiceDetailModels(args.displayedModels);
   const probed = mergeServiceDetailModels(args.probeModels);
+  return displayed.length > 0 ? displayed : probed;
+}
 
-  if (args.modelsSource === "fallback") {
-    return displayed.length > 0 ? displayed : probed;
-  }
-  if (args.modelsSource === "api") {
-    return mergeServiceDetailModels(probed, displayed);
-  }
-  return mergeServiceDetailModels(displayed, probed);
+export function resolvePersistedDefaultModel(
+  savedModels: ReadonlyArray<ServiceDetailModelInfo>,
+  requested: string,
+): string {
+  const requestedId = requested.trim();
+  if (!requestedId) return savedModels[0]?.id ?? "";
+  const match = savedModels.find((model) => model.id.toLowerCase() === requestedId.toLowerCase());
+  return match?.id ?? savedModels[0]?.id ?? requestedId;
 }
 
 export interface ServiceDetailDetectedConfig {
@@ -233,14 +236,17 @@ export async function saveServiceConfig(args: {
     };
   }
 
-  const detectedModel = probe.selectedModel ?? args.detectedModel;
   const detectedConfig = probe.detected ?? null;
   const savedModels = resolveModelsToPersist({
     displayedModels: args.configuredModels,
     probeModels: probe.models,
     modelsSource: detectedConfig?.modelsSource ?? verified?.detected?.modelsSource,
   });
-  const savedApiFormat = detectedConfig?.apiFormat ?? args.apiFormat;
+  const detectedModel = resolvePersistedDefaultModel(
+    savedModels,
+    probe.selectedModel ?? args.detectedModel,
+  );
+  const savedApiFormat = args.apiFormat;
   const savedStream = typeof detectedConfig?.stream === "boolean" ? detectedConfig.stream : args.stream;
   const savedBaseUrl = args.isCustom ? (detectedConfig?.baseUrl ?? trimmedBaseUrl) : undefined;
 

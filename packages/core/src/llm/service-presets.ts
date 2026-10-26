@@ -46,6 +46,17 @@ export function resolveServicePiProvider(service: string): string | undefined {
   return endpoint.api === "anthropic-messages" ? "anthropic" : "openai";
 }
 
+export function resolveRuntimePiProvider(service: string, api: string): string {
+  const baseService = service.startsWith("custom:") ? "custom" : service;
+  if (baseService === "google") return "google";
+  if (baseService === "zhipu") return "zai";
+  if (baseService === "openrouter") return "openrouter";
+  if (baseService === "githubCopilot") return "githubCopilot";
+  if (baseService === "ollama") return "ollama";
+  if (api === "anthropic-messages") return "anthropic";
+  return "openai";
+}
+
 export function resolveServiceModelsBaseUrl(service: string): string | undefined {
   const endpoint = getEndpoint(service);
   return endpoint?.modelsBaseUrl ?? endpoint?.baseUrl;

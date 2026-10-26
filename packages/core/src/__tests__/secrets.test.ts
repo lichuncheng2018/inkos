@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { loadSecrets, saveSecrets, getServiceApiKey } from "../llm/secrets.js";
+import { loadSecrets, loadSecretsSync, saveSecrets, getServiceApiKey, getServiceApiKeySync } from "../llm/secrets.js";
 import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -90,6 +90,16 @@ describe("secrets", () => {
       );
       const key = await getServiceApiKey(root, "custom:内网GPT");
       expect(key).toBe("sk-custom");
+    });
+
+    it("sync reader uses the same secrets file as async", async () => {
+      await mkdir(join(root, ".inkos"), { recursive: true });
+      await writeFile(
+        join(root, ".inkos", "secrets.json"),
+        JSON.stringify({ services: { "custom:启德流": { apiKey: "sk-qide" } } }),
+      );
+      expect(loadSecretsSync(root).services["custom:启德流"]?.apiKey).toBe("sk-qide");
+      expect(getServiceApiKeySync(root, "custom:启德流")).toBe("sk-qide");
     });
   });
 });

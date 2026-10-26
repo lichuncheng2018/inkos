@@ -85,6 +85,25 @@ describe("resolveServiceModel", () => {
     expect(result.temperatureRange).toEqual([0, 2]);
   });
 
+  it("honors Chat Completions on built-in 百炼 instead of the Anthropic preset", async () => {
+    await mkdir(join(root, ".inkos"), { recursive: true });
+    await writeFile(
+      join(root, ".inkos", "secrets.json"),
+      JSON.stringify({ services: { bailian: { apiKey: "sk-bailian" } } }),
+    );
+
+    const result = await resolveServiceModel(
+      "bailian",
+      "qwen-turbo",
+      root,
+      undefined,
+      "chat",
+    );
+
+    expect(result.model.api).toBe("openai-completions");
+    expect(result.model.provider).toBe("openai");
+  });
+
   it("resolves Google to native google-generative-ai model", async () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
@@ -172,6 +191,21 @@ describe("resolveServiceModel", () => {
     expect(result.model.provider).toBe("openai");
     expect(result.model.api).toBe("openai-completions");
     expect(result.model.baseUrl).toBe("http://localhost:1234/v1");
+  });
+
+  it("gives unknown Claude on a custom gateway a writing-sized context window", async () => {
+    const result = await resolveServiceModel(
+      "custom:启德流",
+      "claude-opus-5-5",
+      root,
+      "http://127.0.0.1:1",
+      "anthropic",
+    );
+
+    expect(result.model.id).toBe("claude-opus-5-5");
+    expect(result.model.api).toBe("anthropic-messages");
+    expect(result.model.contextWindow).toBe(128_000);
+    expect(result.model.maxTokens).toBeGreaterThanOrEqual(32_768);
   });
 
   it("resolves local custom OpenAI-compatible services without an API key", async () => {

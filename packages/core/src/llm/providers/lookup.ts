@@ -18,34 +18,99 @@ const PROVIDER_PRIORITY: readonly string[] = [
  * - Layer 2: 全局扫所有 provider 的 models，按 provider id 优先级取第一条
  * - 都 miss: 返回 undefined，调用方走保守默认
  *
- * 不做斜线前缀拆分。lobe 的 processModelList 证实了"靠调用入口带 provider 消歧"
- * 是对的做法，斜线拆分对 PPIO / SiliconCloud 原生命名会误匹配。
+ * 精确 miss 后只对 DeepSeek V4 家族补别名（网关日期后缀、vendor 前缀），
+ * 不把任意 `vendor/model` 拆开，避免 PPIO / SiliconCloud 原生命名误匹配。
  */
 export function lookupModel(
   serviceId: string,
   modelId: string,
 ): InkosModel | undefined {
-  const lowerId = modelId.toLowerCase();
-
+  const candidates = candidateModelIds(modelId);
   const provider = getEndpoint(serviceId);
   if (provider) {
-    const hit = provider.models.find((m) => m.id.toLowerCase() === lowerId);
-    if (hit) return hit;
+    for (const candidate of candidates) {
+      const hit = provider.models.find((m) => m.id.toLowerCase() === candidate);
+      if (hit) return hit;
+    }
   }
 
-  const matches: Array<{ model: InkosModel; providerId: string }> = [];
-  for (const p of getAllEndpoints()) {
-    const hit = p.models.find((m) => m.id.toLowerCase() === lowerId);
-    if (hit) matches.push({ model: hit, providerId: p.id });
+  for (const candidate of candidates) {
+    const matches: Array<{ model: InkosModel; providerId: string }> = [];
+    for (const p of getAllEndpoints()) {
+      const hit = p.models.find((m) => m.id.toLowerCase() === candidate);
+      if (hit) matches.push({ model: hit, providerId: p.id });
+    }
+    if (matches.length === 0) continue;
+    matches.sort((a, b) => {
+      const ai = PROVIDER_PRIORITY.indexOf(a.providerId);
+      const bi = PROVIDER_PRIORITY.indexOf(b.providerId);
+      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    });
+    return matches[0].model;
   }
-  if (matches.length === 0) return undefined;
+  return undefined;
+}
 
-  matches.sort((a, b) => {
-    const ai = PROVIDER_PRIORITY.indexOf(a.providerId);
-    const bi = PROVIDER_PRIORITY.indexOf(b.providerId);
-    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-  });
-  return matches[0].model;
+function candidateModelIds(modelId: string): string[] {
+  const lowerId = modelId.toLowerCase();
+  const bareId = lowerId.includes("/") ? lowerId.slice(lowerId.lastIndexOf("/") + 1) : lowerId;
+  const familyId = deepSeekFamilyId(bareId);
+  if (!familyId) return [lowerId];
+  return [...new Set([lowerId, bareId, familyId])];
+}
+
+function deepSeekFamilyId(modelId: string): string | undefined {
+  if (/^deepseek-flash(?:-|$)/.test(modelId) || /^deepseek-v4(?:\.1)?-flash(?:-|$)/.test(modelId)) {
+    return "deepseek-flash";
+  }
+  if (/^deepseek-v4(?:\.1)?-pro(?:-|$)/.test(modelId)) return "deepseek-v4-pro";
+  return undefined;
+}
+
+/** Official DeepSeek V4 Chat Completions ids that default thinking on when `thinking` is omitted. */
+export function isDeepSeekV4WireCompatId(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  const bareId = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  return (
+    /^deepseek-flash(?:-|$)/.test(bareId)
+    || /^deepseek-v4(?:\.1)?-(?:flash|pro)(?:-|$)/.test(bareId)
+    || bareId === "deepseek-chat"
+    || bareId === "deepseek-reasoner"
+  );
+}
+
+export const DEEPSEEK_MAX_OUTPUT = 393_216;
+export const DEEPSEEK_CONTEXT_WINDOW = 1_000_000;
+export const DEFAULT_OUTPUT_FLOOR = 32_768;
+export const UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW = 128_000;
+
+export function advertisedContextWindow(contextWindow: number | undefined): number {
+  return typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+    ? contextWindow
+    : UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW;
+}
+
+export function isDeepSeekModelId(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  const bareId = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  return bareId.startsWith("deepseek");
+}
+
+export function applyModelTokenLimits(modelId: string, maxTokens: number, contextWindow: number): {
+  readonly maxTokens: number;
+  readonly contextWindow: number;
+} {
+  const resolvedWindow = advertisedContextWindow(contextWindow);
+  if (isDeepSeekModelId(modelId)) {
+    return {
+      maxTokens: Math.max(maxTokens, DEEPSEEK_MAX_OUTPUT),
+      contextWindow: Math.max(resolvedWindow, DEEPSEEK_CONTEXT_WINDOW),
+    };
+  }
+  return {
+    maxTokens: Math.max(maxTokens, DEFAULT_OUTPUT_FLOOR),
+    contextWindow: resolvedWindow,
+  };
 }
 
 /** 某 service 下可用（enabled !== false）的模型列表 */

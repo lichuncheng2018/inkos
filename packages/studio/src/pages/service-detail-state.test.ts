@@ -35,9 +35,22 @@ describe("resolveModelsToPersist", () => {
     ]);
   });
 
-  it("uses live probe results as the snapshot when modelsSource is api", () => {
+  it("keeps a pruned on-screen catalog instead of restoring live probe models", () => {
     expect(resolveModelsToPersist({
       displayedModels: [{ id: "openrouter/auto" }],
+      probeModels: [
+        { id: "google/gemini-3.7-flash" },
+        { id: "openrouter/auto" },
+      ],
+      modelsSource: "api",
+    }).map((model) => model.id)).toEqual([
+      "openrouter/auto",
+    ]);
+  });
+
+  it("fills from the live probe when the screen has no catalog yet", () => {
+    expect(resolveModelsToPersist({
+      displayedModels: [],
       probeModels: [
         { id: "google/gemini-3.7-flash" },
         { id: "openrouter/auto" },
@@ -467,6 +480,88 @@ describe("saveServiceConfig", () => {
       },
     ]);
     expect(result.status).toEqual({ state: "connected", models: [{ id: "qwen3.6:35b-a3b" }] });
+  });
+
+  it("persists the selected Chat Completions protocol instead of a later Anthropic probe", async () => {
+    const bodies: unknown[] = [];
+    const fetchJsonImpl = vi.fn(async (path: string, init?: { body?: string }) => {
+      if (init?.body) bodies.push(JSON.parse(init.body));
+      if (path === "/services/bailian/secret") return { ok: true };
+      if (path === "/services/config") return { ok: true };
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await saveServiceConfig({
+      effectiveServiceId: "bailian",
+      serviceId: "bailian",
+      isCustom: false,
+      resolvedCustomName: "",
+      apiKey: "sk-live",
+      baseUrl: "",
+      apiFormat: "chat",
+      stream: false,
+      temperature: "0.7",
+      detectedModel: "qwen-turbo",
+      verifiedProbe: {
+        apiKey: "sk-live",
+        baseUrl: "",
+        apiFormat: "chat",
+        stream: false,
+        models: [{ id: "qwen-turbo" }],
+        selectedModel: "qwen-turbo",
+        detected: { apiFormat: "anthropic", stream: false, modelsSource: "fallback" },
+      },
+      fetchJsonImpl: fetchJsonImpl as never,
+    });
+
+    expect(bodies[1]).toMatchObject({
+      services: [{ service: "bailian", apiFormat: "chat", stream: false }],
+    });
+  });
+
+  it("persists the pruned on-screen catalog instead of the original probe list", async () => {
+    const bodies: unknown[] = [];
+    const fetchJsonImpl = vi.fn(async (path: string, init?: { body?: string }) => {
+      if (init?.body) bodies.push(JSON.parse(init.body));
+      if (path === "/services/custom%3A%E7%99%BE%E7%82%BC%20Chat%20Completions/secret") return { ok: true };
+      if (path === "/services/config") return { ok: true };
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const result = await saveServiceConfig({
+      effectiveServiceId: "custom:百炼 Chat Completions",
+      serviceId: "custom",
+      isCustom: true,
+      resolvedCustomName: "百炼 Chat Completions",
+      apiKey: "sk-live",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      apiFormat: "chat",
+      stream: false,
+      temperature: "0.7",
+      detectedModel: "drop-me",
+      configuredModels: [{ id: "keep-me" }],
+      verifiedProbe: {
+        apiKey: "sk-live",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        apiFormat: "chat",
+        stream: false,
+        models: [{ id: "keep-me" }, { id: "drop-me" }, { id: "also-drop" }],
+        selectedModel: "drop-me",
+        detected: { apiFormat: "chat", stream: false, modelsSource: "api" },
+      },
+      fetchJsonImpl: fetchJsonImpl as never,
+    });
+
+    expect(bodies[1]).toMatchObject({
+      defaultModel: "keep-me",
+      services: [{
+        service: "custom",
+        name: "百炼 Chat Completions",
+        models: ["keep-me"],
+      }],
+    });
+    expect(result.status).toEqual({ state: "connected", models: [{ id: "keep-me" }] });
+    expect(result.detectedModel).toBe("keep-me");
   });
 });
 

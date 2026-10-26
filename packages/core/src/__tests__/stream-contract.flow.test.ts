@@ -16,7 +16,7 @@ it.each([true, false])('enforces required tool selection without rejecting an or
   const server = createServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     received.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    const call = completeTool && received.length === 3
+    const call = completeTool
       ? { id: 'result-1', type: 'function', function: { name: 'submit_value', arguments: '{"value":7}' } } : undefined;
     if (streaming) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -42,11 +42,16 @@ it.each([true, false])('enforces required tool selection without rejecting an or
       return events.result();
     };
     expect((await run()).stopReason).toBe('stop');
+    const answered = await run('required');
+    expect(answered.stopReason).toBe('stop');
+    expect(answered.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'A response.' })]));
+    expect(received.map(request => request.tool_choice)).toEqual([undefined, 'required']);
     completeTool = true;
     const completed = await run('required');
     expect(completed).toMatchObject({ stopReason: 'toolUse', content: [{ type: 'toolCall', name: 'submit_value', arguments: { value: 7 } }] });
     expect(received).toHaveLength(3);
-    expect(received.slice(1).map(request => request.tool_choice)).toEqual(['required', 'required']);
+    expect(received[2]?.tool_choice).toBe('required');
+    completeTool = false;
     const failed = await run({ type: 'function', function: { name: 'submit_value' } });
     expect(failed).toMatchObject({ stopReason: 'error', errorCode: 'MODEL_REQUIRED_TOOL_MISSING' });
     expect(received).toHaveLength(5);

@@ -5,6 +5,7 @@ import {
   createResyncChapterStateTool,
   createWriteChaptersTool,
   executeExplicitCapabilityTool,
+  resolveWriteNextToolParameters,
   type Observation,
 } from "@actalk/inkos-core";
 import { readdir, stat, unlink } from "node:fs/promises";
@@ -66,12 +67,13 @@ writeCommand
         binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
         workId: bookId,
-        parameters: {
-          instruction: context || "Write the requested consecutive chapters for the active Work.",
+        parameters: await resolveWriteNextToolParameters({
+          projectRoot: root,
           bookId,
+          instruction: context || "Write the requested consecutive chapters for the active Work.",
           chapterCount: count,
           ...(wordCount ? { chapterWordCount: wordCount } : {}),
-        },
+        }),
       });
       const actionData = action.data as {
         readonly chapters?: ReadonlyArray<{
@@ -235,6 +237,7 @@ writeCommand
         parameters: {
           instruction: opts.brief?.trim() || `Rewrite chapter ${chapter}.`,
           bookId,
+          startChapterNumber: nextChapter,
           chapterCount: 1,
           ...(wordCount ? { chapterWordCount: wordCount } : {}),
         },

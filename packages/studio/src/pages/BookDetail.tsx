@@ -1,12 +1,26 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useEffect, useMemo, useState } from "react";
+import { cloneElement, useEffect, useMemo, useState, type ReactElement } from "react";
 import type { Theme } from "../hooks/use-theme";
-import type { TFunction } from "../hooks/use-i18n";
+import type { StringKey, TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../components/ui/tooltip";
+import { cn } from "../lib/utils";
+import {
+  ChevronDown,
   ChevronLeft,
   Zap,
   FileText,
@@ -48,6 +62,21 @@ interface BookData {
 }
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
+
+const REVISE_MODES: ReadonlyArray<{
+  readonly mode: ReviseMode;
+  readonly label: StringKey;
+  readonly tip: StringKey;
+}> = [
+  { mode: "spot-fix", label: "book.spotFix", tip: "book.spotFixTip" },
+  { mode: "polish", label: "book.polish", tip: "book.polishTip" },
+  { mode: "rewrite", label: "book.rewrite", tip: "book.rewriteTip" },
+  { mode: "rework", label: "book.rework", tip: "book.reworkTip" },
+  { mode: "anti-detect", label: "book.antiDetect", tip: "book.antiDetectTip" },
+];
+
+const CHAPTER_ACTION_BUTTON_CLASS =
+  "p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm";
 type ExportFormat = "txt" | "md" | "epub";
 type BookStatus = "active" | "paused" | "outlining" | "completed" | "dropped";
 
@@ -455,6 +484,7 @@ export function BookDetail({
       </div>
 
       {/* Chapters Table */}
+      <TooltipProvider delay={200}>
       <div className="paper-sheet rounded-2xl overflow-hidden border border-border/40 shadow-xl shadow-primary/5">
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
@@ -463,8 +493,16 @@ export function BookDetail({
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-16">#</th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground">{t("book.manuscriptTitle")}</th>
                 <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-28">{t("book.words")}</th>
-                <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-36">{t("book.review")}</th>
-                <th className="text-right px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground">{t("book.curate")}</th>
+                <th className="text-left px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground w-36">
+                  <ActionTip label={t("book.review")} description={t("book.reviewTip")}>
+                    <span className="cursor-help">{t("book.review")}</span>
+                  </ActionTip>
+                </th>
+                <th className="text-right px-6 py-4 font-bold text-[11px] uppercase tracking-widest text-muted-foreground">
+                  <ActionTip label={t("book.curate")} description={t("book.reviseMenuTip")}>
+                    <span className="cursor-help">{t("book.curate")}</span>
+                  </ActionTip>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/30">
@@ -483,66 +521,87 @@ export function BookDetail({
                   </td>
                   <td className="px-6 py-4 text-muted-foreground font-medium tabular-nums text-xs">{(ch.wordCount ?? 0).toLocaleString()}</td>
                   <td className="px-6 py-4">
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight ${ch.observations.length > 0 ? "text-amber-600 bg-amber-500/10" : "text-emerald-600 bg-emerald-500/10"}`}>
-                      {ch.observations.length > 0
-                        ? `${ch.observations.length} ${t("book.observations")}`
-                        : t("book.currentRevision")}
-                    </div>
+                    <ActionTip label={t("book.review")} description={t("book.reviewTip")}>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight cursor-help ${ch.observations.length > 0 ? "text-amber-600 bg-amber-500/10" : "text-emerald-600 bg-emerald-500/10"}`}>
+                        {ch.observations.length > 0
+                          ? `${ch.observations.length} ${t("book.observations")}`
+                          : t("book.currentRevision")}
+                      </span>
+                    </ActionTip>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={async () => {
-                          try {
-                            const review = await fetchJson<{ summary?: string; observations?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(`${review.summary ?? t("book.review")}\n${review.observations?.length ?? 0} ${t("book.observations")}`);
-                            refetch();
-                          } catch (e) {
-                            alert(e instanceof Error ? e.message : "Review failed");
-                          }
-                        }}
-                        className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm"
-                        title={t("book.audit")}
+                      <ActionTip label={t("book.audit")} description={t("book.auditTip")}>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const review = await fetchJson<{ summary?: string; observations?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                              alert(`${review.summary ?? t("book.review")}\n${review.observations?.length ?? 0} ${t("book.observations")}`);
+                              refetch();
+                            } catch (e) {
+                              alert(e instanceof Error ? e.message : "Review failed");
+                            }
+                          }}
+                          className={CHAPTER_ACTION_BUTTON_CLASS}
+                          aria-label={t("book.audit")}
+                        >
+                          <ShieldCheck size={14} />
+                        </button>
+                      </ActionTip>
+                      <ActionTip label={t("book.rework")} description={t("book.reworkButtonTip")}>
+                        <button
+                          type="button"
+                          onClick={() => handleRewrite(ch.number)}
+                          disabled={rewritingChapters.includes(ch.number)}
+                          className={cn(CHAPTER_ACTION_BUTTON_CLASS, "disabled:opacity-50")}
+                          aria-label={t("book.rework")}
+                        >
+                          {rewritingChapters.includes(ch.number)
+                            ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
+                            : <RotateCcw size={14} />}
+                        </button>
+                      </ActionTip>
+                      <ActionTip
+                        label={t("book.syncState")}
+                        description={ch.number === latestPersistedChapter ? t("book.syncTip") : t("book.syncDisabledTip")}
                       >
-                        <ShieldCheck size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleRewrite(ch.number)}
-                        disabled={rewritingChapters.includes(ch.number)}
-                        className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm disabled:opacity-50"
-                        title={t("book.rewrite")}
-                      >
-                        {rewritingChapters.includes(ch.number)
-                          ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
-                          : <RotateCcw size={14} />}
-                      </button>
-                      <button
-                        onClick={() => handleSync(ch.number)}
-                        disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
-                        className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm disabled:opacity-50"
-                        title={data?.book.language === "en" ? "Sync truth/state from edited chapter" : "根据已编辑章节同步 truth/state"}
-                      >
-                        {syncingChapters.includes(ch.number)
-                          ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
-                          : <RefreshCw size={14} />}
-                      </button>
-                      <select
-                        disabled={revisingChapters.includes(ch.number)}
-                        value=""
-                        onChange={(e) => {
-                          const mode = e.target.value as ReviseMode;
-                          if (mode) handleRevise(ch.number, mode);
-                        }}
-                        className="px-2 py-1.5 text-[11px] font-bold rounded-lg bg-secondary text-muted-foreground border border-border/50 outline-none hover:text-primary hover:bg-primary/10 transition-all disabled:opacity-50 cursor-pointer"
-                        title="Revise with AI"
-                      >
-                        <option value="" disabled>{revisingChapters.includes(ch.number) ? t("common.loading") : t("book.curate")}</option>
-                        <option value="spot-fix">{t("book.spotFix")}</option>
-                        <option value="polish">{t("book.polish")}</option>
-                        <option value="rewrite">{t("book.rewrite")}</option>
-                        <option value="rework">{t("book.rework")}</option>
-                        <option value="anti-detect">{t("book.antiDetect")}</option>
-                      </select>
+                        <button
+                          type="button"
+                          onClick={() => handleSync(ch.number)}
+                          disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
+                          className={cn(CHAPTER_ACTION_BUTTON_CLASS, "disabled:opacity-50")}
+                          aria-label={t("book.syncState")}
+                        >
+                          {syncingChapters.includes(ch.number)
+                            ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
+                            : <RefreshCw size={14} />}
+                        </button>
+                      </ActionTip>
+                      <DropdownMenu>
+                        <ActionTip label={t("book.curate")} description={t("book.reviseMenuTip")}>
+                          <DropdownMenuTrigger
+                            disabled={revisingChapters.includes(ch.number)}
+                            className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-bold rounded-lg bg-secondary text-muted-foreground border border-border/50 outline-none hover:text-primary hover:bg-primary/10 transition-all disabled:opacity-50 cursor-pointer"
+                            aria-label={t("book.curate")}
+                          >
+                            {revisingChapters.includes(ch.number) ? t("common.loading") : t("book.curate")}
+                            <ChevronDown size={12} />
+                          </DropdownMenuTrigger>
+                        </ActionTip>
+                        <DropdownMenuContent align="end" className="min-w-[18rem] w-72">
+                          {REVISE_MODES.map((item) => (
+                            <DropdownMenuItem
+                              key={item.mode}
+                              className="flex-col items-start gap-0.5 py-1.5"
+                              onClick={() => handleRevise(ch.number, item.mode)}
+                            >
+                              <span className="font-medium text-foreground">{t(item.label)}</span>
+                              <span className="text-[11px] leading-4 text-muted-foreground whitespace-normal">{t(item.tip)}</span>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </td>
                 </tr>
@@ -563,6 +622,7 @@ export function BookDetail({
           </div>
         )}
       </div>
+      </TooltipProvider>
 
       <ConfirmDialog
         open={confirmDeleteOpen}
@@ -575,5 +635,31 @@ export function BookDetail({
         onCancel={() => setConfirmDeleteOpen(false)}
       />
     </div>
+  );
+}
+
+function ActionTip({
+  label,
+  description,
+  children,
+}: {
+  readonly label: string;
+  readonly description: string;
+  readonly children: ReactElement<{ className?: string; disabled?: boolean }>;
+}) {
+  const disabled = children.props.disabled === true;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={200}
+        render={<span className={cn("inline-flex", disabled && "cursor-not-allowed")} />}
+      >
+        {disabled ? cloneElement(children, { className: cn(children.props.className, "pointer-events-none") }) : children}
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs flex-col items-start gap-0.5 text-left whitespace-normal">
+        <p className="font-semibold">{label}</p>
+        <p className="leading-5 opacity-90">{description}</p>
+      </TooltipContent>
+    </Tooltip>
   );
 }

@@ -11,8 +11,9 @@ export const TurnCompletionSchema = Type.Object({
 export type TurnCompletion = Static<typeof TurnCompletionSchema>;
 
 export const TURN_COMPLETION_GUIDANCE = `## Turn completion
-Use finish_turn to return the final response after answering the request, delivering its requested actions, or identifying a concrete blocker or necessary user decision.
-Announcing planned work is not completion. When work remains possible, call the relevant execution tool and continue from saved results.
+Use finish_turn to return the final response after delivering requested actions, or identifying a concrete blocker or necessary user decision.
+A complete user-facing text answer may end the turn without finish_turn; the host records it as answered and keeps that text.
+When a requested action remains possible, call the execution tool instead of only announcing it.
 Use answered only for information or discussion; delivered for completed action results; needs_input for a necessary user decision; blocked when the request cannot currently proceed.
 Call finish_turn alone after other operations finish. Ground delivery claims in actual tool results. A recoverable tool error does not complete the original request.`;
 

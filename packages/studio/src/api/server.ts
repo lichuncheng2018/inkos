@@ -108,6 +108,7 @@ import {
   createImitationBookTool,
   createBookFoundationTool,
   createWriteChaptersTool,
+  resolveWriteNextToolParameters,
   createFoundationRevisionTool,
   createReviewChapterTool,
   createReviseChapterTool,
@@ -161,6 +162,7 @@ import {
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
+import { isListedBankService } from "../constants/service-groups.js";
 import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
@@ -1225,11 +1227,12 @@ async function executeConfirmedProductionAction(args: {
           : profileSkills("longform-novel")
       ),
     });
-    params = {
+    params = await resolveWriteNextToolParameters({
+      projectRoot: args.root,
       bookId: args.bookId,
       instruction: args.instruction,
       chapterCount,
-    };
+    });
   } else if (args.requestedIntent === "generate_cover") {
     const payload = actionPayload?.generateCover;
     const title = requirePayloadText(payload?.title, pick(lang, "确认生成封面缺少标题，请重新生成确认卡。", "The cover generation confirmation is missing a title. Regenerate the confirmation card."));
@@ -3354,18 +3357,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const tool = createWriteChaptersTool(pipeline, id, {
       workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : writingSkills,
     });
-    executeExplicitCapabilityTool({
+    void resolveWriteNextToolParameters({
+      projectRoot: root,
+      bookId: id,
+      instruction: "Write the next chapter for the active Work.",
+      chapterCount: 1,
+      ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
+    }).then((parameters) => executeExplicitCapabilityTool({
       projectRoot: root,
       binding: confirmedCapabilityBinding("write_next")!,
       tool,
-      parameters: {
-        instruction: "Write the next chapter for the active Work.",
-        bookId: id,
-        chapterCount: 1,
-        ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
-      },
+      parameters,
       workId: id,
-    }).then(
+    })).then(
       (result) => {
         const data = result.data as { chapters?: ReadonlyArray<{ chapterNumber: number; title: string; wordCount: number; observations?: unknown[] }> } | undefined;
         const chapter = data?.chapters?.at(-1);
@@ -3440,7 +3444,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/services", async (c) => {
     const secrets = await loadSecrets(root);
-    const endpoints = getAllEndpoints().filter((ep) => ep.id !== "custom");
+    const endpoints = getAllEndpoints().filter((ep) => ep.id !== "custom" && isListedBankService(ep.id, ep.group));
     let configuredServices: ReturnType<typeof normalizeServiceConfig> = [];
     try {
       const config = await loadRawConfig(root);

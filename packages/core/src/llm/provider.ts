@@ -12,9 +12,9 @@ import type {
   AssistantMessageEvent,
   AssistantMessageEventStream,
 } from "@mariozechner/pi-ai";
-import { resolveServicePreset } from "./service-presets.js";
+import { resolveRuntimePiProvider, resolveServicePreset } from "./service-presets.js";
 import { getEndpoint } from "./providers/index.js";
-import { lookupModel } from "./providers/lookup.js";
+import { applyModelTokenLimits, lookupModel, DEFAULT_OUTPUT_FLOOR, UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW } from "./providers/lookup.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
 import { createLeadingThinkTagStripper, stripLeadingThinkBlock } from "./think-tag-stripper.js";
@@ -22,7 +22,7 @@ import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "./agent-trajectory.js";
-import type { LLMApiFormat } from "./api-format.js";
+import { impliedApiFormat, resolveTransportApi, type LLMApiFormat } from "./api-format.js";
 
 
 // === Streaming Monitor Types ===
@@ -37,7 +37,7 @@ export interface StreamProgress {
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
 const INKOS_USER_AGENT = "InkOS/2.0.0";
-const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 8192 * 3;
+const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = DEFAULT_OUTPUT_FLOOR;
 const TRANSIENT_LLM_RETRIES = 2;
 const DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS = 120_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 90_000;
@@ -179,7 +179,9 @@ export function guardAssistantMessageStream<TApi extends PiApi>(
           terminalSeen ||= event.type === "done" || event.type === "error";
           guarded.push(event.type === "done" && event.reason === "length"
             ? { ...event, message: { ...event.message, content: event.message.content.filter((part) => part.type !== "toolCall") } }
-            : event);
+            : event.type === "error"
+              ? { ...event, error: { ...event.error, errorMessage: wrapLLMError(new Error(event.error.errorMessage ?? ""), { baseUrl: model.baseUrl, model: model.id }).message } }
+              : event);
         }
         if (!terminalSeen) throw new Error("LLM stream ended without a terminal event");
         return;
@@ -204,7 +206,7 @@ export function guardAssistantMessageStream<TApi extends PiApi>(
       role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
       stopReason: callerSignal?.aborted ? "aborted" : "error",
-      errorMessage: lastError instanceof Error ? lastError.message : String(lastError),
+      errorMessage: wrapLLMError(lastError, { baseUrl: model.baseUrl, model: model.id }).message,
       ...(lastError instanceof LLMStreamInactivityError ? {errorCode:"MODEL_STREAM_INACTIVITY"} : {}),
       timestamp: Date.now(),
     };
@@ -248,6 +250,32 @@ function sanitizeHttpHeaders(headers?: Record<string, string>): Record<string, s
     sanitized[key] = value;
   }
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/** DashScope extra CIP is opt-in; disable asks the account to skip further inspection. Built-in 绿网 may still apply. */
+export const DASHSCOPE_DISABLE_INSPECTION = '{"input":"disable","output":"disable"}';
+
+export function isDashScopeEndpoint(service: string, baseUrl: string): boolean {
+  const host = baseUrl.toLowerCase();
+  return service === "bailian"
+    || service === "bailianCodingPlan"
+    || host.includes("dashscope.aliyuncs.com")
+    || host.includes("dashscope-intl.aliyuncs.com");
+}
+
+export function mergeLlmRequestHeaders(args: {
+  readonly service: string;
+  readonly baseUrl: string;
+  readonly userHeaders?: Record<string, string>;
+}): Record<string, string> | undefined {
+  const merged: Record<string, string> = {};
+  if (isDashScopeEndpoint(args.service, args.baseUrl)) {
+    merged["X-DashScope-DataInspection"] = DASHSCOPE_DISABLE_INSPECTION;
+  }
+  for (const [key, value] of Object.entries(args.userHeaders ?? {})) {
+    merged[key] = value;
+  }
+  return sanitizeHttpHeaders(merged);
 }
 
 function mergeUserAgent(headers?: Record<string, string>): Record<string, string> {
@@ -335,14 +363,18 @@ export interface LLMClient {
 
 export function createLLMClient(config: LLMConfig): LLMClient {
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
+  const earlyLimits = applyModelTokenLimits(
+    config.model,
+    _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+    _earlyCard?.contextWindowTokens ?? UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW,
+  );
   const defaults = {
     temperature: config.temperature ?? 0.7,
-    maxTokens: _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+    maxTokens: earlyLimits.maxTokens,
     thinkingBudget: config.thinkingBudget ?? 0,
     extra: config.extra ?? {},
   };
 
-  const apiFormat = config.apiFormat ?? "chat";
   const stream = config.stream ?? true;
 
   // --- Build pi-ai Model object ---
@@ -351,24 +383,24 @@ export function createLLMClient(config: LLMConfig): LLMClient {
   const inkosProvider = getEndpoint(serviceName);
   const modelCard = lookupModel(serviceName, config.model);
 
-  const piApi = resolvePiApi(serviceName, config.apiFormat, (inkosProvider?.api ?? preset?.api) as PiApi) as PiApi;
+  const piApi = resolveTransportApi(
+    serviceName,
+    config.apiFormat,
+    inkosProvider?.api ?? preset?.api,
+  ) as PiApi;
+  const apiFormat = config.apiFormat ?? impliedApiFormat(piApi);
   const baseUrl = config.baseUrl || inkosProvider?.baseUrl || preset?.baseUrl || "";
-  const extraHeaders = sanitizeHttpHeaders(config.headers ?? parseEnvHeaders());
+  const extraHeaders = mergeLlmRequestHeaders({
+    service: serviceName,
+    baseUrl,
+    userHeaders: config.headers ?? parseEnvHeaders(),
+  });
   const compat = piApi === "openai-completions"
     ? resolveProviderCompat(inkosProvider, baseUrl)
     : undefined;
 
-  const provider = config.provider === "anthropic" || piApi === "anthropic-messages" ? "anthropic" : "openai";
-  // pi-ai provider 字段：大多数情况 pi-ai 会按 baseUrl 自动嗅探（openrouter.ai / api.z.ai /
-  // api.x.ai / deepseek.com / anthropic.com 等）。这里只列 pi-ai 嗅探不到、需要显式指定的少数情况。
-  let piProvider: string;
-  if (inkosProvider?.id === "google") piProvider = "google";
-  else if (inkosProvider?.id === "zhipu") piProvider = "zai";
-  else if (inkosProvider?.id === "openrouter") piProvider = "openrouter";
-  else if (inkosProvider?.id === "githubCopilot") piProvider = "githubCopilot";
-  else if (inkosProvider?.id === "ollama") piProvider = "ollama";
-  else if (inkosProvider?.api === "anthropic-messages") piProvider = "anthropic";
-  else piProvider = provider;
+  const piProvider = resolveRuntimePiProvider(serviceName, piApi);
+  const provider = piApi === "anthropic-messages" ? "anthropic" : "openai";
 
   const piModel: PiModel<PiApi> = {
     id: modelCard?.deploymentName ?? config.model,
@@ -383,8 +415,11 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     reasoning: (config.thinkingBudget ?? 0) > 0,
     input: ["text"] as ("text" | "image")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: modelCard?.contextWindowTokens ?? 128_000,
-    maxTokens: modelCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+    ...applyModelTokenLimits(
+      config.model,
+      modelCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+      modelCard?.contextWindowTokens ?? UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW,
+    ),
     ...(extraHeaders ? { headers: extraHeaders } : {}),
     ...(compat ? { compat } : {}),
   };
@@ -400,18 +435,6 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     _apiKey: config.apiKey,
     defaults,
   };
-}
-
-function resolvePiApi(
-  serviceName: string,
-  apiFormat: LLMConfig["apiFormat"] | undefined,
-  presetApi: PiApi | undefined,
-): PiApi {
-  if (serviceName === "custom") {
-    if (apiFormat === "anthropic") return "anthropic-messages";
-    return apiFormat === "responses" ? "openai-responses" : "openai-completions";
-  }
-  return (presetApi ?? "openai-completions") as PiApi;
 }
 
 function resolveProviderCompat(
@@ -635,6 +658,13 @@ function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; rea
     ? `\n  (baseUrl: ${context.baseUrl}, model: ${context.model})`
     : "";
 
+  if (/DataInspectionFailed|inappropriate content/i.test(msg)) {
+    return new Error(
+      `上游内容安全审核拦截（不是 InkOS 审稿）。百炼国内绿网无法在客户端彻底关闭。` +
+      `已请求 X-DashScope-DataInspection=disable；若仍失败，请改用 xAI Grok 等海外服务写擦边内容。` +
+      `\n上游：${msg}${ctxLine}`,
+    );
+  }
   if (msg.includes("400")) {
     // 抽上游 error body 的 message / reason / code（和下方 5xx 一致），让真实错因浮到用户面前
     let detail = "";
