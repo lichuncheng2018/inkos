@@ -20,12 +20,15 @@ export function toolArgumentIssues(schema: TSchema, value: unknown) {
 /**
  * Pi validates a cloned argument object with scalar coercion enabled. A union
  * can therefore turn a valid boolean or numeric string into a number. Domain
- * actions must receive the original, schema-valid JSON types.
+ * actions must receive the original, schema-valid JSON types. A tool may also
+ * declare `normalize` to fill omitted empty collections after that decode.
  */
 export async function preserveToolArgumentTypes(context: BeforeToolCallContext): Promise<undefined> {
   const tool = context.context.tools?.find((candidate) => candidate.name === context.toolCall.name);
   if (!tool) return;
-  const original = decodeStructuredFields(tool.parameters, context.toolCall.arguments);
+  const decoded = decodeStructuredFields(tool.parameters, context.toolCall.arguments);
+  const normalize = (tool as { normalize?: (value: unknown) => unknown }).normalize;
+  const original = typeof normalize === "function" ? normalize(decoded) : decoded;
   const issues = toolArgumentIssues(tool.parameters, original);
   if (issues.length) {
     throw Object.assign(new Error(JSON.stringify({

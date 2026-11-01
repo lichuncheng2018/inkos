@@ -1,4 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { copyTextToClipboard } from "../lib/chapter-text";
 import { cloneElement, useEffect, useMemo, useState, type ReactElement } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { StringKey, TFunction } from "../hooks/use-i18n";
@@ -18,6 +19,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../components/ui/tooltip";
+import { chaptersNewestFirst } from "../lib/chapter-list";
 import { cn } from "../lib/utils";
 import {
   ChevronDown,
@@ -26,6 +28,7 @@ import {
   FileText,
   BarChart2,
   Download,
+  Smartphone,
   Database,
   ShieldCheck,
   RotateCcw,
@@ -53,6 +56,8 @@ interface BookData {
     readonly genre: string;
     readonly status: string;
     readonly chapterWordCount: number;
+    readonly minChapterLength?: number;
+    readonly maxChapterLength?: number;
     readonly targetChapters?: number;
     readonly language?: string;
     readonly fanficMode?: string;
@@ -110,10 +115,15 @@ export function BookDetail({
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsWordCount, setSettingsWordCount] = useState<number | null>(null);
+  const [settingsMinChapterLength, setSettingsMinChapterLength] = useState<number | null>(null);
+  const [settingsMaxChapterLength, setSettingsMaxChapterLength] = useState<number | null>(null);
+  const [settingsMinChapterLengthCleared, setSettingsMinChapterLengthCleared] = useState(false);
+  const [settingsMaxChapterLengthCleared, setSettingsMaxChapterLengthCleared] = useState(false);
   const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(null);
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
+  const [phoneSyncing, setPhoneSyncing] = useState(false);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const latestPersistedChapter = data ? data.nextChapter - 1 : 0;
@@ -234,10 +244,29 @@ export function BookDetail({
 
   const handleSaveSettings = async () => {
     if (!data) return;
+    const target = settingsWordCount ?? data.book.chapterWordCount;
+    const min = settingsMinChapterLengthCleared
+      ? undefined
+      : settingsMinChapterLength ?? data.book.minChapterLength;
+    const max = settingsMaxChapterLengthCleared
+      ? undefined
+      : settingsMaxChapterLength ?? data.book.maxChapterLength;
+    if (
+      (min !== undefined && max !== undefined && min > max)
+      || (min !== undefined && target < min)
+      || (max !== undefined && target > max)
+    ) {
+      alert(t("book.chapterLengthRangeInvalid"));
+      return;
+    }
     setSavingSettings(true);
     try {
       const body: Record<string, unknown> = {};
       if (settingsWordCount !== null) body.chapterWordCount = settingsWordCount;
+      if (settingsMinChapterLengthCleared) body.minChapterLength = null;
+      else if (settingsMinChapterLength !== null) body.minChapterLength = settingsMinChapterLength;
+      if (settingsMaxChapterLengthCleared) body.maxChapterLength = null;
+      else if (settingsMaxChapterLength !== null) body.maxChapterLength = settingsMaxChapterLength;
       if (settingsTargetChapters !== null) body.targetChapters = settingsTargetChapters;
       if (settingsStatus !== null) body.status = settingsStatus;
       await fetchJson(`/books/${bookId}`, {
@@ -245,6 +274,10 @@ export function BookDetail({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      setSettingsMinChapterLengthCleared(false);
+      setSettingsMaxChapterLengthCleared(false);
+      setSettingsMinChapterLength(null);
+      setSettingsMaxChapterLength(null);
       refetch();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Save failed");
@@ -294,9 +327,16 @@ export function BookDetail({
   if (!data) return null;
 
   const { book, chapters } = data;
+  const displayedChapters = chaptersNewestFirst(chapters);
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
 
   const currentWordCount = settingsWordCount ?? book.chapterWordCount;
+  const currentMinChapterLength = settingsMinChapterLengthCleared
+    ? ""
+    : String(settingsMinChapterLength ?? book.minChapterLength ?? "");
+  const currentMaxChapterLength = settingsMaxChapterLengthCleared
+    ? ""
+    : String(settingsMaxChapterLength ?? book.maxChapterLength ?? "");
   const currentTargetChapters = settingsTargetChapters ?? book.targetChapters ?? 0;
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
 
@@ -433,19 +473,94 @@ export function BookDetail({
               <Download size={14} />
               {t("book.export")}
             </button>
+            <button
+              onClick={async () => {
+                setPhoneSyncing(true);
+                try {
+                  const result = await fetchJson<{
+                    configured?: boolean;
+                    legadoUrl?: string;
+                    readerUrl?: string;
+                    error?: string;
+                  }>(`/books/${bookId}/phone-reader`, { method: "POST" });
+                  if (!result.configured) {
+                    alert(t("book.phoneReadNotConfigured"));
+                    return;
+                  }
+                  const sourceUrl = result.legadoUrl ?? result.readerUrl ?? "";
+                  if (sourceUrl) await copyTextToClipboard(sourceUrl);
+                  if (result.error) {
+                    alert(`${t("book.phoneReadFailed")}\n${result.error}\n${sourceUrl}`);
+                    return;
+                  }
+                  alert(`${t("book.phoneReadCopied")}\n${sourceUrl}`);
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : t("book.phoneReadFailed"));
+                } finally {
+                  setPhoneSyncing(false);
+                }
+              }}
+              disabled={phoneSyncing}
+              className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
+            >
+              <Smartphone size={14} />
+              {phoneSyncing ? t("common.loading") : t("book.phoneRead")}
+            </button>
           </div>
       </div>
 
       {/* Book Settings */}
       <div className="paper-sheet rounded-2xl border border-border/40 shadow-sm p-6">
         <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">{t("book.settings")}</h2>
+        <p className="text-xs text-muted-foreground mb-4">{t("book.chapterLengthRangeHint")}</p>
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
             <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.wordsPerChapter")}</label>
             <input
               type="number"
+              min={1}
               value={currentWordCount}
               onChange={(e) => setSettingsWordCount(Number(e.target.value))}
+              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.minChapterLength")}</label>
+            <input
+              type="number"
+              min={1}
+              value={currentMinChapterLength}
+              placeholder="—"
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                if (!raw) {
+                  setSettingsMinChapterLength(null);
+                  setSettingsMinChapterLengthCleared(true);
+                  return;
+                }
+                setSettingsMinChapterLengthCleared(false);
+                setSettingsMinChapterLength(Number(raw));
+              }}
+              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.maxChapterLength")}</label>
+            <input
+              type="number"
+              min={1}
+              value={currentMaxChapterLength}
+              placeholder="—"
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                if (!raw) {
+                  setSettingsMaxChapterLength(null);
+                  setSettingsMaxChapterLengthCleared(true);
+                  return;
+                }
+                setSettingsMaxChapterLengthCleared(false);
+                setSettingsMaxChapterLength(Number(raw));
+              }}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
             />
           </div>
@@ -453,6 +568,7 @@ export function BookDetail({
             <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.targetChapters")}</label>
             <input
               type="number"
+              min={1}
               value={currentTargetChapters}
               onChange={(e) => setSettingsTargetChapters(Number(e.target.value))}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
@@ -506,7 +622,7 @@ export function BookDetail({
               </tr>
             </thead>
             <tbody className="divide-y divide-border/30">
-              {chapters.map((ch, index) => {
+              {displayedChapters.map((ch, index) => {
                 const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
                 return (
                 <tr key={ch.number} className={`group hover:bg-primary/[0.02] transition-colors fade-in ${staggerClass}`}>

@@ -294,7 +294,7 @@ export function App() {
           )}
           {route.page === "chapter" && (
             <div className="mx-auto w-full max-w-[1400px] px-4 py-12 sm:px-6 lg:px-10 lg:py-16 2xl:px-12 fade-in">
-              <ChapterReader bookId={route.bookId} chapterNumber={route.chapterNumber} nav={nav} theme={theme} t={t} />
+              <ChapterReader key={`${route.bookId}-${route.chapterNumber}`} bookId={route.bookId} chapterNumber={route.chapterNumber} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {route.page === "analytics" && (

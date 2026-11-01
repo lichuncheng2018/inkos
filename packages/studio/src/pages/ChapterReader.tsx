@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { ChapterWorkspacePanel } from "../components/ChapterWorkspacePanel";
+import { ChapterPublishActions } from "../components/CopyChapterButton";
 import {
   ChevronLeft,
   Check,
@@ -23,11 +24,13 @@ interface ChapterData {
   readonly chapterNumber: number;
   readonly filename: string;
   readonly content: string;
+  readonly latestChapter?: number;
 }
 
 interface Nav {
   toBook: (id: string) => void;
   toDashboard: () => void;
+  toChapter: (bookId: string, num: number) => void;
 }
 
 export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
@@ -45,6 +48,10 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
+
+  useEffect(() => {
+    document.querySelector("main")?.scrollTo({ top: 0 });
+  }, [chapterNumber]);
 
   const handleStartEdit = () => {
     if (!data) return;
@@ -95,6 +102,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
     .trim();
 
   const paragraphs = body.split(/\n\n+/).filter(Boolean);
+  const latestChapter = data.latestChapter ?? chapterNumber;
+  const hasNext = chapterNumber < latestChapter;
 
   return (
     <div className="w-full space-y-10 fade-in">
@@ -186,10 +195,22 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
           <h1 className="text-4xl md:text-5xl font-serif font-medium italic text-foreground tracking-tight leading-tight">
             {title}
           </h1>
-          <div className="mt-8 flex items-center justify-center gap-4 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
-            <span>{t("reader.manuscriptPage")}</span>
-            <span className="text-border">·</span>
-            <span>{chapterNumber.toString().padStart(2, '0')}</span>
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <div className="flex items-center justify-center gap-4 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
+              <span>{t("reader.manuscriptPage")}</span>
+              <span className="text-border">·</span>
+              <span>{chapterNumber.toString().padStart(2, '0')}</span>
+            </div>
+            <ChapterPublishActions
+              content={editing ? editContent : data.content}
+              hasNext={hasNext}
+              onNext={() => nav.toChapter(bookId, chapterNumber + 1)}
+              copyLabel={t("reader.copyChapter")}
+              copiedLabel={t("reader.copied")}
+              copyFailedLabel={t("reader.copyFailed")}
+              nextLabel={t("reader.nextChapter")}
+              lastLabel={t("reader.lastChapter")}
+            />
           </div>
         </header>
 

@@ -9,6 +9,7 @@ import { guardedPiStream, guardedPiNonStreaming } from "../agent/pi-stream.js";
 import { withExecutionEvidence } from "../harness/execution-evidence.js";
 import { compileHarnessContextText } from "../agent/agent-session.js";
 import { runWorkerAgentTool } from "../agent/worker-agent.js";
+import { actionFailureFacts } from "../harness/action-observation.js";
 
 it.each([true, false])('enforces required tool selection without rejecting an ordinary answer (stream=%s)', async (streaming) => {
   const received: Array<{ tool_choice?: unknown }> = [];
@@ -198,9 +199,15 @@ it('bounds invalid structured submissions and returns schema paths instead of ec
   server.listen(0,'127.0.0.1');await once(server,'listening');
   try{
     const client=createLLMClient({service:'custom',configSource:'studio',provider:'openai',model:'test-model',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiKey:'fixture',apiFormat:'chat',stream:true,temperature:0,thinkingBudget:0});
-    await expect(runWorkerAgentTool(client,'test-model',[{role:'user',content:'Submit chapters.'}],{
+    const failure=await runWorkerAgentTool(client,'test-model',[{role:'user',content:'Submit chapters.'}],{
       name:'submit_chapters',label:'Submit',description:'Submit chapter records',parameters:Type.Object({chapters:Type.Array(Type.Object({number:Type.Integer()})),state:Type.Union([Type.Literal('draft'),Type.Literal('ready')])}),
-    },{maxTokens:128})).rejects.toMatchObject({code:'WORKER_RESULT_INVALID',attempts:3});
+    },{maxTokens:128}).then(()=>null,error=>error);
+    expect(failure).toMatchObject({code:'WORKER_SCHEMA_INVALID',attempts:3,issues:[{path:'/chapters'},{path:'/state',allowedValues:['draft','ready']}]});
+    expect(actionFailureFacts(failure)).toMatchObject({code:'WORKER_SCHEMA_INVALID',resultTool:'submit_chapters',attempts:3});
+    expect(actionFailureFacts(failure).issues).toEqual([
+      expect.objectContaining({path:'/chapters'}),
+      expect.objectContaining({path:'/state',allowedValues:['draft','ready']}),
+    ]);
     expect(requests).toHaveLength(3);
     const feedback=JSON.parse(requests[1].messages.find(message=>message.role==='tool')!.content);
     expect(feedback).toMatchObject({code:'WORKER_SCHEMA_INVALID',issues:[{path:'/chapters'},{path:'/state',allowedValues:['draft','ready']}]});

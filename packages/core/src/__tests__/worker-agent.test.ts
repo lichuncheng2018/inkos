@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Type } from "@sinclair/typebox";
 import { runWorkerAgent, runWorkerAgentTool } from "../agent/worker-agent.js";
 import { BaseAgent, type AgentContext } from "../agents/base.js";
+import { createSettlementToolSchema, normalizeSettlementSubmission } from "../agents/settler-tool.js";
 
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
@@ -245,5 +246,61 @@ describe("Pi worker harness", () => {
     expect(guardedPiNonStreamingMock.mock.calls[0]?.[2]).toMatchObject({
       toolChoice: "required",
     });
+  });
+
+  it("accepts a settlement payload that omits postSettlement and empty collections", async () => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
+      const stream = createAssistantMessageEventStream();
+      const message = {
+        role: "assistant" as const,
+        content: [{
+          type: "toolCall" as const,
+          id: "delta-1",
+          name: "submit_runtime_state_delta",
+          arguments: {
+            chapterSummary: {
+              title: "Return", characters: "Mara", events: "Receipt returned",
+              stateChanges: "The sealed receipt is with its owner.", hookActivity: "", mood: "calm", chapterType: "resolution",
+            },
+            factOps: { upsert: [{ subject: "Mara", predicate: "holding", object: "nothing" }] },
+            hookOps: { resolve: [] },
+          },
+        }],
+        api: model?.api ?? "openai-completions",
+        provider: model?.provider ?? "openai",
+        model: model?.id ?? "deepseek-v4-flash",
+        usage: {
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse" as const,
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end(message);
+      return stream;
+    });
+
+    const result = await runWorkerAgentTool(
+      client(),
+      "deepseek-v4-flash",
+      [{ role: "user", content: "Project chapter facts." }],
+      {
+        name: "submit_runtime_state_delta",
+        label: "Submit runtime state delta",
+        description: "Submit incremental state changes.",
+        parameters: createSettlementToolSchema(),
+        normalize: normalizeSettlementSubmission,
+      },
+    );
+
+    expect(result).toMatchObject({
+      postSettlement: "The sealed receipt is with its owner.",
+      factOps: { upsert: [{ subject: "Mara", predicate: "holding", object: "nothing" }], expire: [] },
+      hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+      newHookCandidates: [],
+    });
+    expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -32,7 +32,7 @@ function escapeHtml(text: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function chapterPlainBody(content: string): string {
+export function chapterPlainBody(content: string): string {
   const lines = content.replaceAll("\r\n", "\n").split("\n");
   let cursor = 0;
   while (cursor < lines.length && !lines[cursor]!.trim()) cursor += 1;
@@ -117,7 +117,7 @@ export function buildLegadoBookSource(origin: string): Record<string, unknown> {
       chapterUrl: "$.url",
     },
     ruleContent: {
-      content: "$.content",
+      content: "@json:$.content",
     },
   };
 }
@@ -198,7 +198,7 @@ export function registerLegadoRoutes(app: Hono, state: StateManager): void {
       const match = findChapterFile(files, num);
       if (!match) return c.json({ error: "Chapter not found" }, 404);
       const raw = await readFile(join(chaptersDir, match), "utf-8");
-      return c.json({ content: chapterBodyToHtml(raw) });
+      return c.json({ content: chapterPlainBody(raw) });
     } catch {
       return c.json({ error: "Chapter not found" }, 404);
     }

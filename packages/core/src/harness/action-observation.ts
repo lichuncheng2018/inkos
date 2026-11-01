@@ -8,7 +8,7 @@ export function actionFailureFacts(error: unknown) {
   while (current && typeof current === "object" && !seen.has(current)) {
     seen.add(current);
     const layer = current as Record<string, unknown>;
-    for (const key of ["code", "resultTool", "stopReason", "attempts", "recovery"]) {
+    for (const key of ["code", "resultTool", "stopReason", "attempts", "recovery", "issues"]) {
       if (detail[key] === undefined && layer[key] !== undefined) detail[key] = layer[key];
     }
     current = layer.cause;
@@ -21,6 +21,7 @@ export function actionFailureFacts(error: unknown) {
     ...(typeof detail.attempts === "number" && Number.isInteger(detail.attempts) && detail.attempts >= 0
       ? { attempts: detail.attempts } : {}),
     ...(detail.recovery !== undefined ? { recovery: detail.recovery } : {}),
+    ...(Array.isArray(detail.issues) ? { issues: detail.issues.slice(0, 16) } : {}),
   };
 }
 

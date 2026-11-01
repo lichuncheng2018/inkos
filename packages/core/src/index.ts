@@ -293,6 +293,18 @@ export type {
   SessionMetadataUpdatedEvent,
 } from "./interaction/session-transcript-schema.js";
 export { buildExportArtifact, writeExportArtifact, ChapterExportSourceError } from "./interaction/export-artifact.js";
+export { loadPhoneSyncConfig, type PhoneSyncConfig } from "./publish/phone-sync-config.js";
+export { phoneReaderPublicUrl } from "./publish/phone-reader-html.js";
+export {
+  buildCloudLegadoBookSource,
+  phoneLegadoSourceUrl,
+} from "./publish/phone-legado.js";
+export {
+  queuePhoneSync,
+  syncBookToSupabase,
+  type PhoneSyncResult,
+  type PhoneSyncState,
+} from "./publish/phone-sync.js";
 export {
   normalizeTruthFileName,
   classifyTruthAuthority,

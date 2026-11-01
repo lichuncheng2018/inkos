@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchJson } from "../../hooks/use-api";
 import { useChatStore } from "../../store/chat";
+import { chaptersNewestFirst } from "../../lib/chapter-list";
 import { SidebarCard } from "./SidebarCard";
 import { cn } from "../../lib/utils";
 
@@ -34,7 +35,7 @@ export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
         </p>
       ) : (
         <ul className="space-y-1 max-h-52 overflow-y-auto overflow-x-hidden">
-          {chapters.map((ch) => {
+          {chaptersNewestFirst(chapters).map((ch) => {
             const ind = ch.observations.length > 0
               ? { symbol: "◆", color: "text-amber-500" }
               : { symbol: "●", color: "text-emerald-500" };

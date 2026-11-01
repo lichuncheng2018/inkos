@@ -84,7 +84,7 @@ describe("Legado LAN endpoints", () => {
       searchUsesCatalog: sources[0]?.searchUrl.includes("/api/v1/legado/books"),
       books: books.books.map((book) => book.name),
       chapterName: detail.chapters[0]?.name,
-      chapterHtml: chapter.content,
+      chapterText: chapter.content,
       publicDnsBlocked: (await app.request("http://untrusted.example/api/v1/legado.json")).status,
     }).toEqual({
       sourceStatus: 200,
@@ -92,7 +92,7 @@ describe("Legado LAN endpoints", () => {
       searchUsesCatalog: true,
       books: ["旧码头"],
       chapterName: "第1章 雨夜",
-      chapterHtml: "<p>雨水落在旧码头。</p>",
+      chapterText: "雨水落在旧码头。",
       publicDnsBlocked: 403,
     });
   });

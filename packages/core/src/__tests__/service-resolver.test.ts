@@ -193,7 +193,7 @@ describe("resolveServiceModel", () => {
     expect(result.model.baseUrl).toBe("http://localhost:1234/v1");
   });
 
-  it("gives unknown Claude on a custom gateway a writing-sized context window", async () => {
+  it("gives unknown models on a custom gateway the 1M context fallback", async () => {
     const result = await resolveServiceModel(
       "custom:启德流",
       "claude-opus-5-5",
@@ -204,7 +204,7 @@ describe("resolveServiceModel", () => {
 
     expect(result.model.id).toBe("claude-opus-5-5");
     expect(result.model.api).toBe("anthropic-messages");
-    expect(result.model.contextWindow).toBe(128_000);
+    expect(result.model.contextWindow).toBe(1_000_000);
     expect(result.model.maxTokens).toBeGreaterThanOrEqual(32_768);
   });
 

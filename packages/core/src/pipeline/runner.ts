@@ -62,6 +62,7 @@ import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { compileStyleGuide } from "../agents/style-guide.js";
 import { compileImportSource, renderCompleteImportSource } from "../agents/import-context.js";
+import { queuePhoneSync } from "../publish/phone-sync.js";
 
 function mergeChapterRevisionInstructions(
   persistedBrief: string,
@@ -286,6 +287,15 @@ export class PipelineRunner {
 
   private logWarn(language: LengthLanguage, message: { zh: string; en: string }): void {
     this.config.logger?.warn(this.localize(language, message));
+  }
+
+  private queuePhoneReaderSync(bookId: string): void {
+    queuePhoneSync({
+      projectRoot: this.config.projectRoot,
+      state: this.state,
+      bookId,
+      logWarn: (message) => this.config.logger?.warn(message),
+    });
   }
 
   async prepareDraftBook(book: BookConfig): Promise<void> {
@@ -1124,6 +1134,7 @@ export class PipelineRunner {
       });
 
       await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId, accept: true , acceptPaths: await changedWorkSourcePaths(this.config.projectRoot, bookId, sourceBefore) });
+      this.queuePhoneReaderSync(bookId);
       return {
         chapterNumber: targetChapter,
         wordCount: revisedCount,
@@ -1413,6 +1424,7 @@ export class PipelineRunner {
       saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
     });
+    this.queuePhoneReaderSync(bookId);
 
     // 6. Send notification
     if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
@@ -1805,6 +1817,7 @@ export class PipelineRunner {
       });
       await syncWorkSourceArtifacts({projectRoot:this.config.projectRoot,workId:input.bookId,accept:true,
         acceptPaths:[...importPaths,...await changedWorkSourcePaths(this.config.projectRoot,input.bookId,sourceBefore)]});
+      this.queuePhoneReaderSync(input.bookId);
 
       return {
         bookId: input.bookId,

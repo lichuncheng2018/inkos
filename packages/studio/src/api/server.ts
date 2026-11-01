@@ -123,6 +123,10 @@ import {
   createRemoveNodeTool,
   deleteLatestChapter,
   executeEditTransaction,
+  loadPhoneSyncConfig,
+  phoneLegadoSourceUrl,
+  phoneReaderPublicUrl,
+  syncBookToSupabase,
   listChapterVersions,
   readChapterPlanDocument,
   readChapterUserBrief,
@@ -3035,7 +3039,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
       if (!match) return c.json({ error: "Chapter not found" }, 404);
       const content = await readFile(join(chaptersDir, match), "utf-8");
-      return c.json({ chapterNumber: num, filename: match, content });
+      const latestChapter = (await state.getNextChapterNumber(id)) - 1;
+      return c.json({ chapterNumber: num, filename: match, content, latestChapter });
     } catch {
       return c.json({ error: "Chapter not found" }, 404);
     }
@@ -3233,6 +3238,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           versionSource: "manual",
         },
       );
+      queueStudioPhoneSync(id);
       return c.json({ ok: true, chapterNumber: num, result });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
@@ -3240,6 +3246,39 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       await releaseLock();
     }
   });
+
+  app.get("/api/v1/books/:id/phone-reader", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "invalid book id" }, 400);
+    const config = await loadPhoneSyncConfig(root);
+    if (!config) return c.json({ configured: false, ok: false });
+    return c.json({
+      configured: true,
+      ok: true,
+      readerUrl: phoneReaderPublicUrl(config.url, id),
+      legadoUrl: phoneLegadoSourceUrl(config.url),
+    });
+  });
+
+  app.post("/api/v1/books/:id/phone-reader", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "invalid book id" }, 400);
+    return c.json(await syncBookToSupabase({
+      projectRoot: root,
+      state,
+      bookId: id,
+    }));
+  });
+
+  function queueStudioPhoneSync(bookId: string): void {
+    void syncBookToSupabase({
+      projectRoot: root,
+      state,
+      bookId,
+    }).then((result) => {
+      if (!result.ok) console.warn(`[studio] phone-sync: ${result.error ?? "failed"}`);
+    });
+  }
 
   // --- Truth files ---
 
@@ -5831,15 +5870,45 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const updates = await c.req.json<{
       chapterWordCount?: number;
+      minChapterLength?: number | null;
+      maxChapterLength?: number | null;
       targetChapters?: number;
       status?: string;
       language?: string;
     }>();
     try {
       const book = await state.loadBookConfig(id);
+      const resolveOptionalLength = (
+        value: number | null | undefined,
+        current: number | undefined,
+      ): number | undefined => {
+        if (value === undefined) return current;
+        if (value === null) return undefined;
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          throw new Error("Chapter length bounds must be positive integers");
+        }
+        return Math.trunc(parsed);
+      };
+      const chapterWordCount = updates.chapterWordCount !== undefined
+        ? Number(updates.chapterWordCount)
+        : book.chapterWordCount;
+      const minChapterLength = resolveOptionalLength(updates.minChapterLength, book.minChapterLength);
+      const maxChapterLength = resolveOptionalLength(updates.maxChapterLength, book.maxChapterLength);
+      if (minChapterLength !== undefined && maxChapterLength !== undefined && minChapterLength > maxChapterLength) {
+        return c.json({ error: "minChapterLength cannot exceed maxChapterLength" }, 400);
+      }
+      if (minChapterLength !== undefined && chapterWordCount < minChapterLength) {
+        return c.json({ error: "chapterWordCount cannot be below minChapterLength" }, 400);
+      }
+      if (maxChapterLength !== undefined && chapterWordCount > maxChapterLength) {
+        return c.json({ error: "chapterWordCount cannot exceed maxChapterLength" }, 400);
+      }
       const updated = {
         ...book,
-        ...(updates.chapterWordCount !== undefined ? { chapterWordCount: Number(updates.chapterWordCount) } : {}),
+        chapterWordCount,
+        ...(updates.minChapterLength !== undefined ? { minChapterLength } : {}),
+        ...(updates.maxChapterLength !== undefined ? { maxChapterLength } : {}),
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
         ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
@@ -5848,7 +5917,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       await state.saveBookConfig(id, updated);
       return c.json({ ok: true, book: updated });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      const message = e instanceof Error ? e.message : String(e);
+      const status = message.includes("bounds must be") ? 400 : 500;
+      return c.json({ error: message }, status);
     }
   });
 

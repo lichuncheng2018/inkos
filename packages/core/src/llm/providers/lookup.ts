@@ -82,7 +82,7 @@ export function isDeepSeekV4WireCompatId(modelId: string): boolean {
 export const DEEPSEEK_MAX_OUTPUT = 393_216;
 export const DEEPSEEK_CONTEXT_WINDOW = 1_000_000;
 export const DEFAULT_OUTPUT_FLOOR = 32_768;
-export const UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW = 128_000;
+export const UNKNOWN_MODEL_FALLBACK_CONTEXT_WINDOW = 1_000_000;
 
 export function advertisedContextWindow(contextWindow: number | undefined): number {
   return typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0

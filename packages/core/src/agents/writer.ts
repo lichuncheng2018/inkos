@@ -4,7 +4,7 @@ import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt } from "./writer-prompts.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prompts.js";
-import { createSettlementToolSchema } from "./settler-tool.js";
+import { createSettlementToolSchema, normalizeSettlementSubmission, validateSettlementHookIds } from "./settler-tool.js";
 import { ChapterDraftToolSchema } from "./writer-tool.js";
 import { readBookRules } from "./rules-reader.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage } from "../models/input-governance.js";
@@ -322,6 +322,7 @@ export class WriterAgent extends BaseAgent {
           ? "Submit only chapter-grounded incremental state changes. The host owns the chapter number."
           : "只提交正文有证据的增量状态变更；章节号由宿主持有。",
         parameters: createSettlementToolSchema(params.allowNewHooks),
+        normalize: normalizeSettlementSubmission,
         validate: (value) => validateSettlementHookIds(value, knownHookIds),
       },
       { temperature: 0.3, maxTokens: Math.min(16384, this.ctx.client.defaults.maxTokens) },
@@ -700,25 +701,3 @@ ${selectedContext || "- none"}\n`;
   }
 }
 
-function validateSettlementHookIds<T extends {
-  readonly hookOps: {
-    readonly upsert: ReadonlyArray<{ readonly hookId: string }>;
-    readonly mention: ReadonlyArray<string>;
-    readonly resolve: ReadonlyArray<string>;
-    readonly defer: ReadonlyArray<string>;
-  };
-}>(value: T, knownHookIds: ReadonlySet<string>): T {
-  const submittedIds = [
-    ...value.hookOps.upsert.map((hook) => hook.hookId),
-    ...value.hookOps.mention,
-    ...value.hookOps.resolve,
-    ...value.hookOps.defer,
-  ];
-  const unknown = [...new Set(submittedIds.filter((hookId) => !knownHookIds.has(hookId)))];
-  if (unknown.length > 0) {
-    throw new Error(
-      `Unknown hook id(s): ${unknown.join(", ")}. Existing hook operations accept only ids from the supplied ledger; submit a newHookCandidate for a new promise.`,
-    );
-  }
-  return value;
-}

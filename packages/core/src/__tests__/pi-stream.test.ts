@@ -99,11 +99,12 @@ describe("guardedPiNonStreaming", () => {
       const calls:string[]=[];
       fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
         const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;calls.push(name);
-        const args=name==="submit_chapter_draft"?{title:"Return",content:"Mara returns the sealed receipt. The owner checks the seal and accepts it."}:{postSettlement:"Receipt returned.",factOps:{upsert:[],expire:[]},hookOps:{upsert:[],mention:[],resolve:[],defer:[]},newHookCandidates:[],chapterSummary:{title:"Return",characters:"Mara",events:"Receipt returned",stateChanges:"",hookActivity:"",mood:"calm",chapterType:"resolution"}};
+        const args=name==="submit_chapter_draft"?{title:"Return",content:"Mara returns the sealed receipt. The owner checks the seal and accepts it."}:{factOps:{upsert:[]},hookOps:{upsert:[],resolve:[]},chapterSummary:{title:"Return",characters:"Mara",events:"Receipt returned",stateChanges:"Receipt returned.",hookActivity:"",mood:"calm",chapterType:"resolution"}};
         return new Response(JSON.stringify({choices:[{finish_reason:"tool_calls",message:{tool_calls:[{id:name,type:"function",function:{name,arguments:JSON.stringify(args)}}]}}]}));
       });
       const chapter=await new WriterAgent({client:boundedClient,model:model.id,projectRoot:root,bookId:"generic"}).writeChapter({book:JSON.parse(original),bookDir:join(root,"works/generic/source"),chapterNumber:1,chapterIntent:"Return the receipt",chapterMemo:{chapter:1,goal:"Return the receipt",body:"The owner accepts the sealed receipt.",threadRefs:[]},contextPackage:{chapter:1,selectedContext:[{source:"story/parent_canon.md",reason:"Original ownership",excerpt:canon,protection:"protected"}]}});
       expect(chapter.chapterNumber).toBe(1);
+      expect(chapter.postSettlement).toBe("Receipt returned.");
       expect(calls).toEqual(["submit_chapter_draft","submit_runtime_state_delta"]);
     }finally{evictAgentCache('initialization');await rm(root,{recursive:true,force:true});}
   });

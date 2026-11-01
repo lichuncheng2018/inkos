@@ -36,6 +36,8 @@ export interface BookSummary {
 export interface BookDetail extends BookSummary {
   readonly createdAt: string;
   readonly chapterWordCount: number;
+  readonly minChapterLength?: number;
+  readonly maxChapterLength?: number;
   readonly language: "zh" | "en" | null;
 }
 

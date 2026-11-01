@@ -96,7 +96,7 @@ describe("DeepSeek token floor", () => {
     });
     expect(applyModelTokenLimits("claude-opus-5-5", 16_384, 0)).toEqual({
       maxTokens: 32_768,
-      contextWindow: 128_000,
+      contextWindow: 1_000_000,
     });
   });
 

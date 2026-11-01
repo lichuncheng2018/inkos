@@ -5,6 +5,8 @@ import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
+import { ChapterPublishActions } from "../CopyChapterButton";
+import { tr } from "../../lib/app-language";
 import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
 import { ProgressSection } from "../sidebar/ProgressSection";
@@ -63,22 +65,29 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   const artifactChapter = useChatStore((s) => s.artifactChapter);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
   const [content, setContent] = useState<string | null>(null);
+  const [latestChapter, setLatestChapter] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const openChapterArtifact = useChatStore((s) => s.openChapterArtifact);
 
   const isChapter = artifactChapter !== null;
   const label = isChapter
     ? `第 ${artifactChapter} 章`
     : artifactFile ? artifactLabel(artifactFile) : "";
+  const hasNext = isChapter && latestChapter !== null && artifactChapter < latestChapter;
 
   useEffect(() => {
     setEditing(false);
     setLoading(true);
+    setLatestChapter(null);
     if (isChapter) {
-      fetchJson<{ content: string }>(`/books/${bookId}/chapters/${artifactChapter}`)
-        .then((data) => setContent(data.content ?? ""))
+      fetchJson<{ content: string; latestChapter?: number }>(`/books/${bookId}/chapters/${artifactChapter}`)
+        .then((data) => {
+          setContent(data.content ?? "");
+          setLatestChapter(data.latestChapter ?? artifactChapter);
+        })
         .catch(() => setContent(null))
         .finally(() => setLoading(false));
     } else if (artifactFile) {
@@ -133,6 +142,21 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           <ArrowLeft size={14} />
         </button>
         <span className="text-[15px] leading-6 font-medium truncate flex-1">{label}</span>
+        {isChapter && !loading && (editing ? editContent : content) !== null && (
+          <ChapterPublishActions
+            content={editing ? editContent : content ?? ""}
+            hasNext={hasNext}
+            onNext={() => {
+              if (artifactChapter === null || !hasNext) return;
+              openChapterArtifact(artifactChapter + 1);
+            }}
+            copyLabel={tr("复制本章", "Copy chapter")}
+            copiedLabel={tr("已复制", "Copied")}
+            copyFailedLabel={tr("复制失败，请手动选择正文", "Copy failed. Select the chapter text manually.")}
+            nextLabel={tr("下一章", "Next chapter")}
+            lastLabel={tr("已是最后一章", "Last chapter")}
+          />
+        )}
         {!loading && content !== null && !editing && (
           <button
             onClick={handleEdit}

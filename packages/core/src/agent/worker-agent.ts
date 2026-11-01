@@ -41,6 +41,7 @@ export interface WorkerResultTool<TParameters extends TSchema> {
   readonly label: string;
   readonly description: string;
   readonly parameters: TParameters;
+  readonly normalize?: (parameters: unknown) => unknown;
   readonly validate?: (parameters: Static<TParameters>) => Static<TParameters> | Promise<Static<TParameters>>;
 }
 
@@ -333,7 +334,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   let submitted: Static<TParameters> | undefined;
   let modelTurns = 0;
   let resultAttemptsExhausted = false;
-  let lastValidationError: (Error & {code?:string}) | undefined;
+  let lastValidationError: (Error & {code?:string; issues?: unknown}) | undefined;
   const maxResultTurns = 3;
   const { validate, ...toolDefinition } = resultTool;
   const tool: AgentTool<TParameters, Static<TParameters>> = {
@@ -342,18 +343,20 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       const decodedPaths:string[]=[];
       params=decodeStructuredFields(resultTool.parameters,params,decodedPaths) as typeof params;
       if(decodedPaths.length)recordExecutionEvidence('worker-arguments-decoded',{resultTool:resultTool.name,paths:decodedPaths});
+      if (resultTool.normalize) params = resultTool.normalize(params) as typeof params;
       const issues = toolArgumentIssues(resultTool.parameters, params);
       if (issues.length) {
-        const failure={code:'WORKER_SCHEMA_INVALID',resultTool:resultTool.name,issues};
+        const failure={code:'WORKER_SCHEMA_INVALID' as const,resultTool:resultTool.name,issues};
         recordExecutionEvidence('worker-result-invalid',failure);
-        lastValidationError=undefined;
-        throw new Error(JSON.stringify(failure));
+        lastValidationError=Object.assign(new Error(JSON.stringify(failure)), failure);
+        throw lastValidationError;
       }
       return params as Static<TParameters>;
     },
     execute: async (_toolCallId, params): Promise<AgentToolResult<Static<TParameters>>> => {
-      const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
       try {
+        if (resultTool.normalize) params = resultTool.normalize(params) as typeof params;
+        const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
         submitted = validate ? await validate(parsed) : parsed;
       } catch(error) {
         lastValidationError=error instanceof Error?error:new Error(String(error));
@@ -415,6 +418,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     if (resultAttemptsExhausted) throw Object.assign(new Error(lastValidationError?.message??'Structured result remained invalid after bounded correction attempts'), {
       code:lastValidationError?.code??'WORKER_RESULT_INVALID',resultTool:resultTool.name,attempts:modelTurns,
       lastToolError:[...agent.state.messages].reverse().find(message=>message.role==='toolResult'&&message.isError),
+      ...(Array.isArray(lastValidationError?.issues) ? {issues: lastValidationError.issues} : {}),
     });
     const initialResult = agent.state.messages.at(-1);
     if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "length") {

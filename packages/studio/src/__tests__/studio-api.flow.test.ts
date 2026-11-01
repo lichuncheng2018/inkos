@@ -76,6 +76,52 @@ describe("Studio API mini-flows", () => {
     await expect(access(join(root, "works", session.sessionId))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("updates chapter length bounds on PUT /api/v1/books/:id", async () => {
+    const initial = createInitialWorkManifestWrite({
+      workId: "bounds-book", title: "Bounds", profileId: "longform-novel", language: "zh", writes: [],
+    });
+    await mkdir(join(root, "works", "bounds-book", "source"), { recursive: true });
+    await writeFile(join(root, initial.write.relativePath), initial.write.content);
+    await writeFile(join(root, "works/bounds-book/source/book.json"), JSON.stringify({
+      id: "bounds-book", title: "Bounds", platform: "local", genre: "general",
+      status: "active", targetChapters: 10, chapterWordCount: 3000,
+      minChapterLength: 3000, maxChapterLength: 4500, language: "zh",
+      createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z",
+    }));
+    const app = createStudioServer({} as never, root);
+    const ok = await app.request("/api/v1/books/bounds-book", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapterWordCount: 2700,
+        minChapterLength: 2500,
+        maxChapterLength: 3500,
+      }),
+    });
+    expect(ok.status).toBe(200);
+    const saved = JSON.parse(await readFile(join(root, "works/bounds-book/source/book.json"), "utf-8"));
+    expect(saved).toMatchObject({
+      chapterWordCount: 2700,
+      minChapterLength: 2500,
+      maxChapterLength: 3500,
+    });
+    const bad = await app.request("/api/v1/books/bounds-book", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapterWordCount: 2400 }),
+    });
+    expect(bad.status).toBe(400);
+    const cleared = await app.request("/api/v1/books/bounds-book", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ minChapterLength: null, maxChapterLength: null }),
+    });
+    expect(cleared.status).toBe(200);
+    const withoutBounds = JSON.parse(await readFile(join(root, "works/bounds-book/source/book.json"), "utf-8"));
+    expect(withoutBounds.minChapterLength).toBeUndefined();
+    expect(withoutBounds.maxChapterLength).toBeUndefined();
+  });
+
   it("lists initialized books while preserving an unfinished Work in the canonical library", async () => {
     for (const id of ["ready-book", "unfinished-book"]) {
       const initial = createInitialWorkManifestWrite({
