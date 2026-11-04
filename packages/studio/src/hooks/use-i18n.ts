@@ -187,8 +187,22 @@ const strings = {
   "book.export": { zh: "导出", en: "Export" },
   "book.phoneRead": { zh: "手机阅读", en: "Phone Reader" },
   "book.phoneReadCopied": { zh: "「阅读」书源已复制。App 里网络导入后，写完新章下拉刷新目录即可。", en: "Legado book source copied. Import it once; pull to refresh after new chapters." },
+  "book.phoneReadSyncedManualCopy": {
+    zh: "已同步到云端，但浏览器不允许在长等待后自动复制。请手动复制下方书源链接，在阅读 App 里网络导入一次即可。",
+    en: "Cloud sync finished, but the browser blocked auto-copy after the wait. Copy the book source URL below and import it once in Legado.",
+  },
   "book.phoneReadFailed": { zh: "同步到云端失败", en: "Cloud sync failed" },
   "book.phoneReadNotConfigured": { zh: "还没配置 Supabase 手机阅读。", en: "Supabase phone reader is not configured." },
+  "book.phoneReadHint": {
+    zh: "把本书章节推到 Supabase，并生成「阅读」App 可导入的书源链接。新章写完后点同步，手机端下拉刷新目录即可。",
+    en: "Push chapters to Supabase and get a Legado book-source URL. Sync again after new chapters; pull to refresh on your phone.",
+  },
+  "book.phoneReadSyncSuccess": {
+    zh: "推送成功：已同步 {count} 章到云端（{time}）",
+    en: "Push succeeded: synced {count} chapters to the cloud ({time})",
+  },
+  "book.phoneReadCopyLink": { zh: "复制书源链接", en: "Copy book source URL" },
+  "book.phoneReadLinkCopied": { zh: "链接已复制", en: "Link copied" },
   "book.manuscriptTitle": { zh: "章节标题", en: "Manuscript Title" },
   "book.curate": { zh: "操作", en: "Actions" },
   "book.spotFix": { zh: "精修", en: "Spot Fix" },

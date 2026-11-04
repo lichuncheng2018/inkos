@@ -22,14 +22,14 @@ export function CopyChapterButton({
   useEffect(() => () => window.clearTimeout(timeoutRef.current), []);
 
   const handleCopy = useCallback(async () => {
-    try {
-      await copyTextToClipboard(chapterTextForPublish(content));
-      setCopied(true);
-      window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
-    } catch {
+    const ok = await copyTextToClipboard(chapterTextForPublish(content));
+    if (!ok) {
       window.alert(failedLabel);
+      return;
     }
+    setCopied(true);
+    window.clearTimeout(timeoutRef.current);
+    timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
   }, [content, failedLabel]);
 
   return (
