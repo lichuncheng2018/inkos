@@ -12,6 +12,9 @@ Apply this method inside the active architect, writer, auditor, or reviser opera
 - Every passage must alter conflict, evidence, emotion, relationship, knowledge, position, or future consequence. Remove padding rather than stretching to a number.
 - Control information deliberately: answer some active reader questions, deepen others through concrete evidence, and do not manufacture twists by hiding facts the viewpoint should know.
 - Preserve the user's voice, viewpoint, prohibitions, proportions, and current direction. Genre convention is only a default when the governed context is silent.
+- For Chinese prose, default to plain, direct sentences and short paragraphs, each carrying one action, line of dialogue, concrete fact, or immediate reaction. Vary sentence length when clarity needs it; do not enforce a mechanical length limit.
+- Explain relevant rules and quantities plainly after a concrete action, question, or result. Use brief dialogue to ask, confirm, negotiate, or reveal information; keep the viewpoint character's calculations tied to the next decision.
+- Favor ordinary words and direct reactions, with sensory detail chosen for the moment. Use humor or contemporary comparisons sparingly when they fit the character, rather than turning each beat into a polished maxim.
 - End a chapter after a material change or fresh pressure, not with a mechanical cliffhanger formula. Show the after-effect of major payoffs before starting another escalation cycle.
 - Use references as evidence for craft or facts only. Do not reproduce source wording, names, scene order, or signature combinations.
 - During review or revision, diagnose and repair the smallest layer that actually causes the problem. A formatting failure is not evidence that the prose is bad.
