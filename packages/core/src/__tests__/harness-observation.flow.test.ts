@@ -41,7 +41,8 @@ it("preserves the failed worker stage through the ledger and model-facing tool b
     expect(Object.keys(observed).sort()).toEqual(["attempts","code","message","resultTool","status","stopReason"]);
     expect(ledger.listEvents(handle.episode.id).find(event=>event.type==="action-failed")?.payload)
       .toMatchObject({code:"MODEL_OUTPUT_LIMIT",resultTool:"submit_chapter_memo",stopReason:"length",attempts:1});
-    runtime.finishEpisode(handle,"failed");
+    runtime.finishEpisode(handle,"failed",{reason:observed.message});
+    expect(ledger.listEvents(handle.episode.id).at(-1)).toMatchObject({type:"episode-failed",payload:{reason:observed.message}});
   } finally { ledger.close(); await rm(root,{recursive:true,force:true}); }
 });
 

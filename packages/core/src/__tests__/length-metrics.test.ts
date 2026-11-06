@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  assertChapterLength,
   buildLengthSpec,
   countChapterLength,
   defaultChapterLength,
@@ -45,5 +46,24 @@ describe("length metrics", () => {
       target: 2200,
       countingMode: "en_words",
     });
+  });
+
+  it("keeps the target inside the author's explicit range", () => {
+    const range = { minChapterLength: 2000, maxChapterLength: 2500 };
+    expect(buildLengthSpec(2200, "zh", range).target).toBe(2200);
+    expect(buildLengthSpec(3000, "zh", range)).toEqual({ target: 2250, countingMode: "zh_chars", ...range });
+    expect(buildLengthSpec(3000, "zh", { maxChapterLength: 2500 }).target).toBe(2500);
+    expect(buildLengthSpec(1500, "zh", { minChapterLength: 2000 }).target).toBe(2000);
+  });
+
+  it("states the exact change a length failure needs", () => {
+    const spec = buildLengthSpec(2200, "zh", { minChapterLength: 2000, maxChapterLength: 2500 });
+    const adjustmentFor = (content: string) => {
+      try { assertChapterLength(content, spec); } catch (error) { return (error as { adjustment?: unknown }).adjustment; }
+      return undefined;
+    };
+    expect(adjustmentFor("字".repeat(3000))).toEqual({ change: "shorten", atLeast: 500, towardTarget: 800 });
+    expect(adjustmentFor("字".repeat(1500))).toEqual({ change: "expand", atLeast: 500, towardTarget: 700 });
+    expect(adjustmentFor("字".repeat(2300))).toBeUndefined();
   });
 });

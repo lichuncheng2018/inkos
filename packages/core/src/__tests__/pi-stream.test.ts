@@ -270,7 +270,8 @@ describe("guardedPiNonStreaming", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0]!.tools.map(t=>t.function.name)).not.toContain('workspace__review_and_export_work_artifact');
       expect(calls[1]!.tools.map(t=>t.function.name)).toEqual(expect.arrayContaining(['workspace__review_and_export_work_artifact','workspace__revise_work_artifact']));
-      expect(calls[1]!.messages.at(-3)?.content).toBe(request);
+      expect(calls[1]!.messages.at(-4)?.content).toBe(request);
+      expect(calls[1]!.messages.at(-1)?.content).toMatch(/^<host_execution_progress>/);
       expect((await readTranscriptEvents(root,'create-fixture')).filter(e=>e.type==='request_committed')).toHaveLength(2);
     } finally {evictAgentCache('create-fixture');await rm(root,{recursive:true,force:true});}
   });
@@ -321,8 +322,9 @@ describe("guardedPiNonStreaming", () => {
     });
     try {
       await runAgentSession({projectRoot:root,sessionId:'resume-fixture',bookId:null,workId:null,profileId:'workspace-default',sessionKind:'chat',language:'en',model,apiKey:'fixture',stream:false,pipeline:{} as never,resumeAction:{toolCallId:'import-1',capabilityId:'adaptation',actionId:'continuation_import',parameters:{sourcePath:'source.txt'},result:{status:'success',summary:'Imported',content:'Imported',artifacts:[],observations:[],data:{kind:'book_created',workId:'book'}}}},request);
-      expect(calls[0]?.messages.slice(-3).map(m=>m.role)).toEqual(['user','assistant','tool']);
-      expect(calls[0]?.messages.at(-3)?.content).toBe(request);
+      expect(calls[0]?.messages.slice(-4).map(m=>m.role)).toEqual(['user','assistant','tool','user']);
+      expect(calls[0]?.messages.at(-4)?.content).toBe(request);
+      expect(calls[0]?.messages.at(-1)?.content).toMatch(/^<host_execution_progress>/);
       expect((await readTranscriptEvents(root,'resume-fixture')).filter(e=>e.type==='request_started').map(e=>e.input)).toEqual([request]);
     } finally {evictAgentCache('resume-fixture');await rm(root,{recursive:true,force:true});}
   });
@@ -586,6 +588,59 @@ describe("guardedPiNonStreaming", () => {
     expect(fetchWithProxyMock).toHaveBeenCalledTimes(2);
     expect(events).not.toContain("error");
     expect((await stream.result()).stopReason).toBe("stop");
+  });
+
+  it("keeps the requested expression target above source wording during prose-only revision",async()=>{
+    const requests:Array<{messages:Array<{role:string;content:string}>}>=[];
+    fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
+      requests.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{
+        id:'style-revision',type:'function',function:{name:'submit_revised_chapter',arguments:JSON.stringify({revisedContent:'她数了两遍，一共十六块灵石。',addressedCodes:[]})},
+      }]}}]}));
+    });
+    const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
+    const original='资产核验完毕：灵石十六块。';
+    const direction='保留十六块灵石的事实，整段改为自然直白的表达。';
+    const guide='朴素直述，情绪自然，不写盘点报告。';
+    await new ReviserAgent({client,model:model.id,projectRoot:'/tmp'}).reviseChapter('/tmp',original,1,[],'polish',undefined,{
+      language:'zh',contextPackage:{chapter:1,selectedContext:[
+        {source:'runtime/chapter_memo',reason:'Current author instruction',excerpt:direction,protection:'protected'},
+        {source:'story/style_guide.md',reason:'Author style guidance',excerpt:guide,protection:'protected'},
+      ]},
+    });
+    const system=requests[0]!.messages.filter(message=>message.role==='system').map(message=>message.content).join('\n');
+    const user=requests[0]!.messages.filter(message=>message.role==='user').map(message=>message.content).join('\n');
+    expect(system).toContain('原文措辞不是文风权威');
+    expect(system).toContain('用户指定的目标文风');
+    expect(system).toContain('保持事实、事件、人物和因果');
+    expect(user).toContain(direction);
+    expect(user).toContain(guide);
+    expect(user).toContain(original);
+  });
+
+  it("keeps the revision nearest the explicit length range when every retry misses only on length",async()=>{
+    const attempts=['one two three four five six seven','one two three four five six','one two three four five six seven eight nine'];
+    const requests:Array<{messages:Array<{role:string;content:string}>}>=[];
+    fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
+      requests.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{
+        id:`length-${requests.length}`,type:'function',function:{name:'submit_revised_chapter',arguments:JSON.stringify({revisedContent:attempts[requests.length-1]})},
+      }]}}]}));
+    });
+    const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
+    const spec=buildLengthSpec(4,'en',{minChapterLength:3,maxChapterLength:4});
+    const result=await new ReviserAgent({client,model:model.id,projectRoot:'/tmp'}).reviseChapter('/tmp','alpha beta gamma delta epsilon',1,[],'rewrite',undefined,{
+      language:'en',contextPackage:{chapter:1,selectedContext:[]},lengthSpec:spec,keepNearestLength:true,
+    });
+    expect(requests).toHaveLength(3);
+    expect(result).toMatchObject({revisedContent:attempts[1],wordCount:6});
+    expect(chapterLengthDelivery(result.wordCount,spec)?.status).toBe('needs_revision');
+    const feedback=JSON.parse(requests[1]!.messages.filter(message=>message.role==='tool').at(-1)!.content);
+    expect(feedback.adjustment).toEqual({change:'shorten',atLeast:3,towardTarget:3});
+    requests.length=0;
+    await expect(new ReviserAgent({client,model:model.id,projectRoot:'/tmp'}).reviseChapter('/tmp','alpha beta gamma delta epsilon',1,[],'rewrite',undefined,{
+      language:'en',contextPackage:{chapter:1,selectedContext:[]},lengthSpec:spec,
+    })).rejects.toMatchObject({code:'CHAPTER_LENGTH_OUT_OF_RANGE'});
   });
 
   it("corrects invalid source ranges and length violations while preserving surrounding source bytes",async()=>{

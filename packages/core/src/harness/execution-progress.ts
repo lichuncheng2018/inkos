@@ -2,6 +2,8 @@ import type {AgentMessage} from '@mariozechner/pi-agent-core';
 import {createHash} from 'node:crypto';
 import {actionResultFacts} from './action-observation.js';
 
+export const HOST_PROGRESS_OPEN_TAG='<host_execution_progress>';
+
 /** Exact receipts from tool exchanges. These record actions, never infer task completion. */
 export function executionProgress(messages: readonly AgentMessage[], maxChars: number): string {
   const calls=new Map<string,{name:string;arguments:Record<string,unknown>}>();

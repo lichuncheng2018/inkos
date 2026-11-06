@@ -1058,7 +1058,9 @@ async function runAgentSessionUnlocked(
           return result;
         } catch (error) {
           cached.deliveryFailed = true;
-          if (ephemeral) cached.harnessRuntime.finishEpisode(handle, isAbortLike(error) ? "cancelled" : "failed");
+          if (ephemeral) cached.harnessRuntime.finishEpisode(handle, isAbortLike(error) ? "cancelled" : "failed", {
+            reason: error instanceof Error ? error.message : String(error),
+          });
           throw error;
         } finally {
           cached.activeActions--;
@@ -1295,9 +1297,9 @@ async function runAgentSessionUnlocked(
   cached.artifactDeliveries = new TurnArtifactDeliveries();
   if (config.resumeAction) cached.artifactDeliveries.observe(config.resumeAction.result, config.resumeAction.parameters);
   let episodeFinished = false;
-  const finishEpisode = (status: "completed" | "failed" | "cancelled") => {
+  const finishEpisode = (status: "completed" | "failed" | "cancelled", reason?: string) => {
     if (episodeFinished) return;
-    cached!.harnessRuntime.finishEpisode(episodeHandle, status);
+    cached!.harnessRuntime.finishEpisode(episodeHandle, status, { reason });
     episodeFinished = true;
     cached!.currentEpisode = null;
   };
@@ -1411,7 +1413,7 @@ async function runAgentSessionUnlocked(
         timestamp: Date.now(),
         error: failedError,
       }));
-      finishEpisode(turnAborted ? "cancelled" : "failed");
+      finishEpisode(turnAborted ? "cancelled" : "failed", failedError);
       removeCachedAgent(cacheKey);
     } else {
       const committed = await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
@@ -1423,7 +1425,8 @@ async function runAgentSessionUnlocked(
         timestamp: Date.now(),
       }));
       cached.lastCommittedSeq = committed.seq;
-      finishEpisode(completion?.status === "blocked" ? "failed" : "completed");
+      if (completion?.status === "blocked") finishEpisode("failed", completion.message);
+      else finishEpisode("completed");
     }
   } catch (error) {
     await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
@@ -1435,7 +1438,7 @@ async function runAgentSessionUnlocked(
       timestamp: Date.now(),
       error: error instanceof Error ? error.message : String(error),
     }));
-    finishEpisode(isAbortLike(error) ? "cancelled" : "failed");
+    finishEpisode(isAbortLike(error) ? "cancelled" : "failed", error instanceof Error ? error.message : String(error));
     removeCachedAgent(cacheKey);
     throw error;
   } finally {

@@ -45,11 +45,19 @@ export function buildLengthSpec(
   bounds: { readonly minChapterLength?: number; readonly maxChapterLength?: number } = {},
 ): LengthSpec {
   return {
-    target,
+    target: targetWithinBounds(target, bounds.minChapterLength, bounds.maxChapterLength),
     countingMode: resolveLengthCountingMode(language),
     ...(bounds.minChapterLength!==undefined?{minChapterLength:bounds.minChapterLength}:{}),
     ...(bounds.maxChapterLength!==undefined?{maxChapterLength:bounds.maxChapterLength}:{}),
   };
+}
+
+/** Explicit bounds are the hard contract; a stale or per-call target outside them would contradict it. */
+function targetWithinBounds(target: number, min?: number, max?: number): number {
+  if (min !== undefined && max !== undefined && (target < min || target > max)) return Math.round((min + max) / 2);
+  if (min !== undefined && target < min) return min;
+  if (max !== undefined && target > max) return max;
+  return target;
 }
 
 /** Explicit author bounds are hard checks; an approximate target alone is not. */
@@ -64,13 +72,24 @@ export function chapterLengthDelivery(count: number, spec: LengthSpec) {
     measurements:{count,countingMode:spec.countingMode},target:spec,issues};
 }
 
+/** Distance from the explicit range in native units; 0 when inside it or unbounded. */
+export function chapterLengthGap(count: number, spec: LengthSpec): number {
+  return Math.max(0, (spec.minChapterLength ?? 0) - count, count - (spec.maxChapterLength ?? Infinity));
+}
+
 export function assertChapterLength(content: string, spec?: LengthSpec): void {
   if(!spec)return;
-  const delivery=chapterLengthDelivery(countChapterLength(content,spec.countingMode),spec);
-  if(delivery?.issues.length)throw Object.assign(new Error(JSON.stringify({
-    code:"CHAPTER_LENGTH_OUT_OF_RANGE",...delivery,
+  const count=countChapterLength(content,spec.countingMode);
+  const delivery=chapterLengthDelivery(count,spec);
+  if(!delivery?.issues.length)return;
+  // Models estimate length poorly; give the exact change instead of the range alone.
+  const adjustment=spec.maxChapterLength!==undefined&&count>spec.maxChapterLength
+    ?{change:"shorten" as const,atLeast:count-spec.maxChapterLength,towardTarget:Math.max(0,count-spec.target)}
+    :{change:"expand" as const,atLeast:chapterLengthGap(count,spec),towardTarget:Math.max(0,spec.target-count)};
+  throw Object.assign(new Error(JSON.stringify({
+    code:"CHAPTER_LENGTH_OUT_OF_RANGE",...delivery,adjustment,
     instruction:"Revise the complete chapter into the explicit length range, preserving core events and causal continuity.",
-  })),{code:"CHAPTER_LENGTH_OUT_OF_RANGE",delivery});
+  })),{code:"CHAPTER_LENGTH_OUT_OF_RANGE",delivery,adjustment});
 }
 
 function stripMarkdownMetadata(content: string): string {

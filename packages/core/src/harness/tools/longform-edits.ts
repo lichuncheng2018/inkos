@@ -9,44 +9,9 @@ import { safeChildPath } from "../../utils/path-safety.js";
 import { BookRulesDataToolSchema } from "../../agents/architect-tool.js";
 import { BookRulesSchema } from "../../models/book-rules.js";
 import { commitAtomicFileSet } from "../../utils/atomic-file-set.js";
+import { assertSafeTruthFileName } from "../truth-files.js";
 
-const SAFE_TRUTH_FLAT_FILE_NAMES = new Set([
-  "author_intent.md",
-  "current_focus.md",
-  "book_rules.md",
-  "style_guide.md",
-  "parent_canon.md",
-  "fanfic_canon.md",
-  "current_state.md",
-  "pending_hooks.md",
-  "chapter_summaries.md",
-]);
-
-const SAFE_TRUTH_OUTLINE_FILE_NAMES = new Set([
-  "outline/story_frame.md",
-  "outline/volume_map.md",
-]);
-
-const SAFE_ROLE_TRUTH_FILE_RE = /^roles\/(主要角色|次要角色|major|minor)\/[^/\\]+\.md$/u;
-
-export function assertSafeTruthFileName(fileName: string): string {
-  const trimmed = fileName.trim();
-  const withExtension = trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
-  const lower = withExtension.toLowerCase();
-  if (
-    !trimmed
-    || withExtension.startsWith("/")
-    || withExtension.includes("\\")
-    || withExtension.includes("\0")
-    || withExtension.includes("..")
-  ) {
-    throw new Error(`Invalid truth file name: ${JSON.stringify(fileName)}`);
-  }
-  if (SAFE_TRUTH_FLAT_FILE_NAMES.has(lower)) return lower;
-  if (SAFE_TRUTH_OUTLINE_FILE_NAMES.has(lower)) return lower;
-  if (SAFE_ROLE_TRUTH_FILE_RE.test(withExtension)) return withExtension;
-  throw new Error(`Invalid truth file name: ${JSON.stringify(fileName)}`);
-}
+export { assertSafeTruthFileName };
 
 function resolveBookId(toolName: string, requestedBookId: string | undefined, activeBookId: string | null): string {
   const resolved = requestedBookId ?? activeBookId ?? undefined;
@@ -83,7 +48,7 @@ function textResult<T>(text: string, details: T): AgentToolResult<T> {
 
 const WriteTruthFileParams = Type.Object({
   bookId: Type.Optional(Type.String({ description: "Work ID. Omit to use the active Work." })),
-  fileName: Type.String({ description: "Truth file path under story/." }),
+  fileName: Type.String({ description: "Truth file path relative to story/, such as current_focus.md, outline/volume_map.md or roles/主要角色/<name>.md." }),
   content: Type.String({ description: "Full replacement content for the truth file." }),
   bookRulesData: Type.Optional(BookRulesDataToolSchema),
 });
@@ -107,7 +72,7 @@ export function createWriteTruthFileTool(
         await mkdir(dirname(targetPath), { recursive: true });
         if (fileName === "book_rules.md") {
           if (!params.bookRulesData) {
-            throw new Error("write_truth_file requires bookRulesData when replacing book_rules.md");
+            throw new Error("write_truth_file requires bookRulesData when replacing book_rules.md; book_rules.json is generated from it.");
           }
           const data = BookRulesSchema.parse({ version: "2", ...params.bookRulesData });
           await commitAtomicFileSet({

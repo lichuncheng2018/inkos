@@ -11,6 +11,8 @@ import {syncWorkSourceArtifacts} from '../harness/source-sync.js';
 import {createBuiltInWorkProfileRegistry} from '../harness/builtin-profiles.js';
 import {createReplaceWorkArtifactTool,createExportWorkTool,createAdoptWorkRevisionTool} from '../harness/tools/work-artifacts.js';
 import {reviseShortFictionProduction} from '../pipeline/short-fiction-runner.js';
+import {assertGenericArtifactEditable} from '../harness/artifact-edit-policy.js';
+import {assertSafeTruthFileName} from '../harness/truth-files.js';
 
 it('revises only an opening, then applies an author-requested chapter reduction while retaining historical prose',async()=>{
   const root=await mkdtemp(join(tmpdir(),'inkos-author-contract-'));
@@ -99,3 +101,24 @@ it('allows an independent script edit and export in a composed Work while preser
     expect(await readFile(join(root,'works/hybrid/source/runs/main/state/current.json'),'utf8')).toBe(state);
   }finally{await rm(root,{recursive:true,force:true});}
 },15000);
+
+it('names the long-form action that edits a managed artifact',()=>{
+  const profile=createBuiltInWorkProfileRegistry().require('longform-novel');
+  const work=createWorkManifest({id:'novel',title:'Novel',profileId:profile.id,language:'zh'});
+  const recoveryFor=(path:string)=>{
+    try{assertGenericArtifactEditable(work,path,profile);}catch(error){return (error as {code:string;recovery:unknown});}
+    return undefined;
+  };
+  expect(recoveryFor('source/chapters/0003_新车-4d54.md')).toMatchObject({code:'ARTIFACT_DOMAIN_ACTION_REQUIRED',recovery:{action:'longform__revise_chapter',parameters:{chapterNumber:3}}});
+  expect(recoveryFor('source/story/outline/volume_map.md')?.recovery).toMatchObject({action:'longform__write_truth_file',parameters:{fileName:'outline/volume_map.md'}});
+  expect(recoveryFor('source/story/state/hooks.json')?.recovery).toMatchObject({action:'longform__resync_chapter_state'});
+  expect(recoveryFor('source/book.json')?.recovery).toEqual({reason:expect.stringContaining('Studio')});
+  expect(recoveryFor('source/script.md')).toBeUndefined();
+});
+
+it('accepts story-relative truth file names with a redundant story prefix and lists the allowed names otherwise',()=>{
+  expect(assertSafeTruthFileName('story/current_focus.md')).toBe('current_focus.md');
+  expect(assertSafeTruthFileName('source/story/outline/volume_map.md')).toBe('outline/volume_map.md');
+  expect(assertSafeTruthFileName('story/roles/主要角色/萧知凡.md')).toBe('roles/主要角色/萧知凡.md');
+  for(const name of ['book_rules.json','world.md','../book.json'])expect(()=>assertSafeTruthFileName(name)).toThrow(/Allowed: author_intent\.md/);
+});

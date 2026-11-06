@@ -43,7 +43,7 @@ const WriteChaptersParams = Type.Object({
   bookId: Type.Optional(Type.String()),
   startChapterNumber: Type.Integer({ minimum: 1, description: "First chapter in the requested writing range. Use the author's target, or inspect current progress for a request to continue. Existing chapters require revision, not another append." }),
   chapterCount: Type.Optional(Type.Integer({ minimum: 1 })),
-  chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
+  chapterWordCount: Type.Optional(Type.Integer({ minimum: 1, description: "Only when the author states a per-chapter length in this request. Omit to use the Work's configured chapter length and range." })),
 });
 
 export async function resolveWriteNextToolParameters(input: {

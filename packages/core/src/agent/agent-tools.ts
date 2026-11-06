@@ -3071,8 +3071,8 @@ export function createReadTool(
       _toolCallId: string,
       params: Static<typeof ReadParams>,
     ): Promise<AgentToolResult<unknown>> {
-      if (Boolean(params.artifactId) === Boolean(params.path) || (params.path && (params.workId || params.revisionId || params.startLine || params.lineCount))) {
-        throw Object.assign(new Error("Supply either artifactId (with optional Work/revision/page) or an external input path."), { code: "READ_TARGET_INVALID" });
+      if (Boolean(params.artifactId) === Boolean(params.path) || (params.path && (params.workId || params.revisionId))) {
+        throw Object.assign(new Error("Supply either artifactId (with optional workId/revisionId) or an external input path, not both; workId and revisionId apply only to artifactId. startLine/lineCount page either target."), { code: "READ_TARGET_INVALID" });
       }
       if (params.artifactId) {
         const workId = params.workId ?? options.workId;
@@ -3112,7 +3112,17 @@ export function createReadTool(
         }
         throw error;
       }
-      return textResult(content);
+      if (params.startLine === undefined && params.lineCount === undefined) return textResult(content);
+      const lines = splitSourceLines(content);
+      const startLine = params.startLine ?? 1;
+      if (startLine > Math.max(1, lines.length)) throw Object.assign(new Error("Requested line is past the end of the file."), { code: "ARTIFACT_LINE_OUT_OF_RANGE" });
+      const endLine = Math.min(lines.length, startLine - 1 + (params.lineCount ?? 200));
+      return textResult(numberSourceLines(lines.slice(startLine - 1, endLine).join(""), startLine), {
+        kind: "file_read", path: params.path, startLine, endLine, totalLines: lines.length,
+        lineFormat: "number-tab-source", measurements: measureSourceText(content),
+        contentScope: startLine === 1 && endLine === lines.length ? "full_file" : "page_excerpt",
+        nextRead: endLine < lines.length ? { path: params.path, startLine: endLine + 1, lineCount: params.lineCount ?? 200 } : null,
+      });
     },
   };
 }

@@ -73,6 +73,21 @@ it('assigns the same artifact roles at creation and later registration using sto
   for(const write of writes)expect(await readFile(join(root,write.relativePath),'utf8')).toBe(write.content);
 });
 
+it('pages an uploaded input read by path like a registered artifact',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'inkos-upload-read-'));
+  try{
+    await mkdir(join(root,'.inkos/uploads/brief'),{recursive:true});
+    await writeFile(join(root,'.inkos/uploads/brief/brief.md'),'line one\nline two\nline three\n');
+    const read=createReadTool(root,{scope:'project'});
+    const path='.inkos/uploads/brief/brief.md';
+    expect((await read.execute('whole',{path},undefined as never,undefined)).content).toEqual([{type:'text',text:'line one\nline two\nline three\n'}]);
+    const page=await read.execute('page',{path,lineCount:2},undefined as never,undefined);
+    expect(page.details).toMatchObject({kind:'file_read',startLine:1,endLine:2,totalLines:3,contentScope:'page_excerpt',nextRead:{path,startLine:3,lineCount:2}});
+    expect(page.content).toEqual([{type:'text',text:'1\tline one\n2\tline two'}]);
+    await expect(read.execute('mixed',{path,workId:'novel'},undefined as never,undefined)).rejects.toMatchObject({code:'READ_TARGET_INVALID'});
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
 it('exposes source directory discovery outside longform and recovers a directory read',async()=>{
   const {root}=await fixture();
   const registry=createProductionCapabilityRegistry({pipeline:new PipelineRunner({client:{} as never,model:'unused',projectRoot:root}),projectRoot:root,sessionId:'directory',profileId:'interactive-film',work:null,language:'en',playWorldExists:false,sameSessionProposal:false,allowSystemFileRead:false});

@@ -1,4 +1,5 @@
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+import { HOST_PROGRESS_OPEN_TAG } from "../harness/execution-progress.js";
 import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import type {
@@ -60,6 +61,7 @@ export function guardedPiStream<TApi extends Api>(
       headers: { ...(model.headers ?? {}), ...(options?.headers ?? {}), ...traceHeaders },
       onPayload: async (payload, activeModel) => {
         let configured = explicitDeepSeekThinkingMode(payload, activeModel);
+        if (activeModel.api === "anthropic-messages") configured = cacheBeforeHostProgress(configured);
         const choice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
         if (choice !== undefined && configured && typeof configured === "object") {
           if (activeModel.api === "openai-completions") configured = { ...configured, tool_choice: choice };
@@ -298,6 +300,33 @@ function explicitDeepSeekThinkingMode(payload: unknown, model: Model<Api>): unkn
     delete body.max_completion_tokens;
   }
   return body;
+}
+
+/**
+ * Pi places the conversation cache breakpoint on the last user block. Host
+ * progress is rebuilt for every call, so a breakpoint there is never reused.
+ */
+function cacheBeforeHostProgress(payload: unknown): unknown {
+  type Block = Record<string, unknown>;
+  const messages = (payload as { messages?: unknown } | undefined)?.messages;
+  if (!Array.isArray(messages) || messages.length < 2) return payload;
+  const progress = messages.at(-1) as { content?: unknown };
+  const anchor = messages.at(-2) as { content?: unknown };
+  const progressBlocks = Array.isArray(progress.content) ? progress.content as Block[] : [];
+  const anchorBlocks = Array.isArray(anchor.content) ? anchor.content as Block[] : [];
+  const marker = progressBlocks.at(-1);
+  const target = anchorBlocks.at(-1);
+  if (!marker?.cache_control || typeof marker.text !== "string" || !marker.text.startsWith(HOST_PROGRESS_OPEN_TAG)
+    || !target || !["text", "image", "document", "tool_result"].includes(String(target.type))) return payload;
+  const { cache_control: cacheControl, ...unmarked } = marker;
+  return {
+    ...payload as Record<string, unknown>,
+    messages: [
+      ...messages.slice(0, -2),
+      { ...anchor, content: [...anchorBlocks.slice(0, -1), { ...target, cache_control: cacheControl }] },
+      { ...progress, content: [...progressBlocks.slice(0, -1), unmarked] },
+    ],
+  };
 }
 
 function toOpenAIChatMessages(context: Context): Array<Record<string, unknown>> {

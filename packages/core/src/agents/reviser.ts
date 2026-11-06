@@ -2,8 +2,8 @@ import { BaseAgent } from "./base.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import type { Observation } from "../models/observation.js";
 import type { ContextPackage } from "../models/input-governance.js";
-import { countChapterLength, assertChapterLength } from "../utils/length-metrics.js";
-import { Type } from '@sinclair/typebox';
+import { countChapterLength, assertChapterLength, chapterLengthGap } from "../utils/length-metrics.js";
+import { Type, type Static } from '@sinclair/typebox';
 import { numberReviewSource } from '../models/observation.js';
 import {textRangeEditContract,textSelectionEditContract,TextEditRangeSchema} from '../utils/text-range-edits.js';
 import { ChapterRewriteToolSchema } from "./reviser-tool.js";
@@ -44,6 +44,12 @@ export class ReviserAgent extends BaseAgent {
       readonly lengthSpec?: LengthSpec;
       /** Observe a complete source-bound candidate without adopting it. */
       readonly onCandidate?: (content: string) => Promise<void>;
+      /**
+       * When retries run out on length alone, return the complete attempt
+       * nearest the range instead of failing. Only for callers that report
+       * the remaining gap; a hard final-manuscript contract must not set it.
+       */
+      readonly keepNearestLength?: boolean;
     },
   ): Promise<ReviseOutput> {
     if (!options) throw new Error("Reviser requires governed context and language.");
@@ -74,9 +80,10 @@ export class ReviserAgent extends BaseAgent {
       { role: "user" as const, content: userPrompt },
     ];
     const outputBudget = Math.min(this.ctx.client.defaults.maxTokens, Math.max(8192, Math.ceil((options.lengthSpec?.target ?? chapterContent.length) * 4) + 8192));
+    const nearestSpec = options.keepNearestLength ? options.lengthSpec : undefined;
     const output = mode === "spot-fix" || options.targetText!==undefined
-      ? await this.submitSpotFix(messages, chapterContent, outputBudget, options.lengthSpec,options.targetText,options.onCandidate)
-      : await this.submitRewrite(messages, outputBudget, options.lengthSpec,body);
+      ? await this.submitSpotFix(messages, chapterContent, outputBudget, options.lengthSpec,options.targetText,options.onCandidate,nearestSpec)
+      : await this.submitRewrite(messages, outputBudget, options.lengthSpec,body,nearestSpec);
     const wordCount = options.lengthSpec
       ? countChapterLength(output.revisedContent, options.lengthSpec.countingMode)
       : output.wordCount;
@@ -90,6 +97,7 @@ export class ReviserAgent extends BaseAgent {
     lengthSpec?: LengthSpec,
     targetText?:string,
     onCandidate?: (content: string) => Promise<void>,
+    nearestSpec?: LengthSpec,
   ): Promise<ReviseOutput> {
     let planUsage={promptTokens:0,completionTokens:0,totalTokens:0};
     let contract:ReturnType<typeof textRangeEditContract>|ReturnType<typeof textSelectionEditContract>;
@@ -112,6 +120,7 @@ export class ReviserAgent extends BaseAgent {
       ...(lengthSpec.maxChapterLength===undefined?{}:{maximum:lengthSpec.maxChapterLength-fixedLength}),
     }:undefined;
     if(replacementBudget?.maximum!==undefined&&replacementBudget.maximum<0)throw Object.assign(new Error('The protected text alone exceeds the chapter maximum. These edit ranges cannot satisfy both scope and length constraints.'),{code:'CHAPTER_EDIT_SCOPE_CONFLICT',replacementBudget});
+    const nearest=nearestLengthAttempt<Record<string,string>>(nearestSpec);
     const { result, usage } = await this.submitStructured([...messages,{role:'user',content:JSON.stringify({editableRanges:contract.ranges,replacementBudget,instruction:'Submit only replacement text in each range_N_content field. The replacement budget is shared by all fields, not per field. Keep the original trailing newline when present. The host preserves all source bytes outside the selected ranges.'})}], {
       name: "submit_chapter_range_replacements",
       label: "Submit chapter range replacements",
@@ -120,21 +129,22 @@ export class ReviserAgent extends BaseAgent {
       validate: async result => {
         const candidate=contract.apply(result);
         await onCandidate?.(candidate);
+        nearest.observe(result,candidate);
         try{assertChapterLength(candidate,lengthSpec);}
         catch(error){
-          const failure=error as Error&{code?:string;delivery?:object};
+          const failure=error as Error&{code?:string;delivery?:object;adjustment?:object};
           if(failure.code!=='CHAPTER_LENGTH_OUT_OF_RANGE')throw error;
           const sourceLength=lengthSpec?countChapterLength(originalChapter,lengthSpec.countingMode):undefined;
-          throw Object.assign(new Error(JSON.stringify({code:failure.code,...failure.delivery,scope:'selected_ranges',replacementBudget,source:{length:sourceLength,unchangedByThisAttempt:true},candidateCommitted:false,instruction:'The rejected replacement has not changed the source chapter. Adjust only the selected replacement fields to their combined budget. Do not include or rewrite protected surrounding text.'})),{code:failure.code,delivery:failure.delivery,replacementBudget});
+          throw Object.assign(new Error(JSON.stringify({code:failure.code,...failure.delivery,adjustment:failure.adjustment,scope:'selected_ranges',replacementBudget,source:{length:sourceLength,unchangedByThisAttempt:true},candidateCommitted:false,instruction:'The rejected replacement has not changed the source chapter. Adjust only the selected replacement fields to their combined budget. Do not include or rewrite protected surrounding text.'})),{code:failure.code,delivery:failure.delivery,replacementBudget});
         }
         return result;
       },
-    }, { temperature: 0.3, maxTokens });
+    }, { temperature: 0.3, maxTokens }).catch(error=>nearest.recover(error));
     const revisedContent = contract.apply(result);
     return {
       revisedContent,
       wordCount: revisedContent.length,
-      tokenUsage:{promptTokens:planUsage.promptTokens+usage.promptTokens,completionTokens:planUsage.completionTokens+usage.completionTokens,totalTokens:planUsage.totalTokens+usage.totalTokens},
+      tokenUsage:{promptTokens:planUsage.promptTokens+(usage?.promptTokens??0),completionTokens:planUsage.completionTokens+(usage?.completionTokens??0),totalTokens:planUsage.totalTokens+(usage?.totalTokens??0)},
     };
   }
 
@@ -143,7 +153,9 @@ export class ReviserAgent extends BaseAgent {
     maxTokens: number,
     lengthSpec?: LengthSpec,
     normalizeContent:(content:string)=>string=content=>content,
+    nearestSpec?: LengthSpec,
   ): Promise<ReviseOutput> {
+    const nearest=nearestLengthAttempt<Static<typeof ChapterRewriteToolSchema>>(nearestSpec);
     const { result, usage } = await this.submitStructured(messages, {
       name: "submit_revised_chapter",
       label: "Submit revised chapter",
@@ -152,16 +164,33 @@ export class ReviserAgent extends BaseAgent {
       validate: result => {
         const revisedContent=normalizeContent(result.revisedContent);
         if(!revisedContent.trim())throw Object.assign(new Error('Submit chapter prose in addition to its title'),{code:'CHAPTER_BODY_EMPTY'});
+        nearest.observe({...result,revisedContent},revisedContent);
         assertChapterLength(revisedContent,lengthSpec);
         return{...result,revisedContent};
       },
-    }, { temperature: 0.3, maxTokens });
+    }, { temperature: 0.3, maxTokens }).catch(error=>nearest.recover(error));
     return {
       revisedContent: result.revisedContent,
       wordCount: result.revisedContent.length,
-      tokenUsage: usage,
+      ...(usage ? { tokenUsage: usage } : {}),
     };
   }
+}
+
+/** Tracks the attempt nearest the range; inert without a spec, so length failures propagate. */
+function nearestLengthAttempt<T>(spec: LengthSpec | undefined) {
+  let nearest: { readonly result: T; readonly gap: number } | undefined;
+  return {
+    observe(result: T, content: string): void {
+      if (!spec) return;
+      const gap = chapterLengthGap(countChapterLength(content, spec.countingMode), spec);
+      if (!nearest || gap < nearest.gap) nearest = { result, gap };
+    },
+    recover(error: unknown): { readonly result: T; readonly usage?: undefined } {
+      if ((error as { code?: string }).code !== "CHAPTER_LENGTH_OUT_OF_RANGE" || !nearest) throw error;
+      return { result: nearest.result };
+    },
+  };
 }
 
 function buildRevisionProtocol(mode: ReviseMode, language: "zh" | "en"): string {

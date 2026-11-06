@@ -163,6 +163,38 @@ it.each(["chat", "responses", "anthropic"] as const)("carries the required resul
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }, 15000);
 
+it("anchors the Anthropic conversation cache before per-call host progress", async () => {
+  const requests: Array<{ messages: Array<{ role: string; content: Array<Record<string, unknown>> }> }> = [];
+  const server = createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const send = (payload: { type: string; [key: string]: unknown }) => response.write(`event: ${payload.type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    send({ type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", content: [], model: "fixture", usage: { input_tokens: 2, output_tokens: 0 } } });
+    send({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    send({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } });
+    send({ type: "content_block_stop", index: 0 });
+    send({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } });
+    send({ type: "message_stop" });
+    response.end();
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "anthropic", model: "fixture", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat: "anthropic", stream: true, temperature: 0, thinkingBudget: 0 });
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    const stream = guardedPiStream(client._piModel!, { systemPrompt: "Use tools.", messages: [
+      { role: "user", content: "Read the outline.", timestamp: 1 },
+      { role: "assistant", content: [{ type: "toolCall", id: "read_1", name: "workspace__read", arguments: {} }], api: "anthropic-messages", provider: "anthropic", model: "fixture", usage, stopReason: "toolUse", timestamp: 2 },
+      { role: "toolResult", toolCallId: "read_1", toolName: "workspace__read", content: [{ type: "text", text: "Outline body." }], isError: false, timestamp: 3 },
+      { role: "user", content: '<host_execution_progress>\n{"totals":{"successful":1}}\n</host_execution_progress>', timestamp: 4 },
+    ] }, { apiKey: "fixture", maxTokens: 64 });
+    for await (const _event of stream) { /* drain */ }
+    const [toolResults, progress] = requests[0]!.messages.slice(-2);
+    expect(toolResults!.content.at(-1)).toMatchObject({ type: "tool_result", cache_control: { type: "ephemeral" } });
+    expect(progress!.content.at(-1)).not.toHaveProperty("cache_control");
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
 it("records received partial tool output when a live stream is cancelled", async () => {
   let calls=0;
   const server = createServer(async (request,response) => {

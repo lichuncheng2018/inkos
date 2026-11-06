@@ -26,8 +26,9 @@ describe("context assembly mini-flow", () => {
     const failure={role:'toolResult',toolCallId:'b',toolName:'workspace__read',isError:true,content:[{type:'text',text:'{"code":"WORK_PATH_IS_DIRECTORY"}'}]};
     const next=await transform([...history,{role:'assistant',content:[{type:'toolCall',id:'b',name:'workspace__read',arguments:{path:'works/w/source/'}}]},failure] as never[]);
     expect(calls).toBe(1);
-    expect(next.at(-1)).toEqual(failure);
-    const receipt=next.find(m=>m.role==='user'&&typeof m.content==='string'&&m.content.startsWith('<host_execution_progress>')) as {content:string};
+    expect(next.at(-2)).toEqual(failure);
+    const receipt=next.at(-1) as {role:string;content:string};
+    expect(receipt.content.startsWith('<host_execution_progress>')).toBe(true);
     const progress=JSON.parse(receipt.content.split('\n')[1]!);
     expect(progress.totals).toEqual({successful:1,failed:1,uniqueReadPaths:1});
     expect(progress.readPaths).toEqual(['works/w/source/a.md']);
@@ -165,7 +166,8 @@ describe("context assembly mini-flow", () => {
     const records = history.split("\n").map((line)=>JSON.parse(line));
     expect(records.map((record)=>record.role)).toEqual(["assistant","toolResult"]);
     expect(records[1].toolCallId).toBe("read-1");
-    expect(result.at(-1)).toEqual(user);
+    expect(result.at(-2)).toEqual(user);
+    expect((result.at(-1) as {content:string}).content).toMatch(/^<host_execution_progress>/);
     expect(result.some((message)=>message.role==="toolResult")).toBe(false);
     history = "";
     const smallResult = {role:"toolResult",toolCallId:"read-2",toolName:"workspace__read",content:[{type:"text",text:"Ready"}],isError:false,details:{preview:"UI metadata. ".repeat(5000)}};
@@ -173,6 +175,37 @@ describe("context assembly mini-flow", () => {
       {role:"assistant",content:[{type:"toolCall",id:"read-2",name:"workspace__read",arguments:{}}]},smallResult,
     ] as never);
     expect(history).toBe("");
-    expect(uncompressed.at(-1)).toEqual(smallResult);
+    expect(uncompressed.at(-2)).toEqual(smallResult);
+  });
+
+  it("keeps the transcript as a stable request prefix ahead of per-call Work state and progress", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-context-order-"));
+    roots.push(root);
+    const profile = createBuiltInWorkProfileRegistry().require("longform-novel");
+    const work = createWorkManifest({ id: "harbor", title: "Harbor", profileId: profile.id, language: "en" });
+    await saveWorkManifest(root, work);
+    const transform = createHarnessContextTransform({ projectRoot: root, work, profile, budgetTokens: 8_000 });
+    const earlier = [
+      { role: "user", content: "Outline the harbor.", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "Outlined." }], timestamp: 2 },
+    ];
+    const request = { role: "user", content: "Read the outline.", timestamp: 3 };
+    const exchange = (id: string) => [
+      { role: "assistant", content: [{ type: "toolCall", id, name: "workspace__read", arguments: { path: `works/harbor/source/${id}.md` } }] },
+      { role: "toolResult", toolCallId: id, toolName: "workspace__read", isError: false, content: [{ type: "text", text: `${id} body` }] },
+    ];
+    const first = await transform([...earlier, request, ...exchange("a")] as never);
+    const second = await transform([...earlier, request, ...exchange("a"), ...exchange("b")] as never);
+    const label = (message: unknown) => {
+      const { role, content } = message as { role: string; content: unknown };
+      return typeof content === "string" && content.startsWith("<") ? content.slice(1, content.indexOf(">")) : role;
+    };
+    const contents = (messages: unknown[]) => messages.map((message) => (message as { content: unknown }).content);
+
+    expect(second.map(label)).toEqual([
+      "user", "assistant", "current_work_context", "user",
+      "assistant", "toolResult", "assistant", "toolResult", "host_execution_progress",
+    ]);
+    expect(contents(second.slice(0, first.length - 1))).toEqual(contents(first.slice(0, -1)));
   });
 });

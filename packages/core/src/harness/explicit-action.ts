@@ -55,7 +55,9 @@ export async function executeExplicitCapabilityTool(input: {
     return result;
   } catch (error) {
     try {
-      runtime.finishEpisode(handle, input.signal?.aborted ? "cancelled" : "failed");
+      runtime.finishEpisode(handle, input.signal?.aborted ? "cancelled" : "failed", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
     } catch {
       // Preserve the original action error if the episode is already terminal.
     }

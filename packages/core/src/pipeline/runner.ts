@@ -925,12 +925,13 @@ export class PipelineRunner {
         };
       }
 
-      const chapterLengthTarget = chapterMeta.lengthTelemetry?.target ?? book.chapterWordCount;
       const lengthLanguage = chapterMeta.lengthTelemetry?.countingMode === "en_words"
         ? "en"
         : language;
+      // Target and bounds must come from the same Work setting; the chapter's
+      // telemetry target can predate it.
       const lengthSpec = buildLengthSpec(
-        chapterLengthTarget,
+        book.chapterWordCount,
         lengthLanguage,
         book,
       );
@@ -970,6 +971,9 @@ export class PipelineRunner {
           targetText:editScope?.targetText,
           contextPackage: reviseControlInput.contextPackage,
           lengthSpec,
+          // The returned delivery reports any remaining gap as needs_revision,
+          // as for newly written chapters.
+          keepNearestLength: true,
         },
       );
 

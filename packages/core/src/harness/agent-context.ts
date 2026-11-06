@@ -11,7 +11,7 @@ import {
 } from "./context-compiler.js";
 import type { WorkManifest, WorkProfile } from "./contracts.js";
 import { loadWorkManifest } from "./work-store.js";
-import {executionProgress} from './execution-progress.js';
+import {executionProgress, HOST_PROGRESS_OPEN_TAG} from './execution-progress.js';
 
 export interface ConversationCompactionRequest {
   readonly history: string;
@@ -109,9 +109,15 @@ export function createHarnessContextTransform(input: {
         }
       : null;
     const progress=executionProgress(messages.slice(lastUserIndex>=0?lastUserIndex+1:0),Math.max(100,Math.min(8000,Math.floor(input.budgetTokens*0.6))));
-    const progressMessage:UserMessage|undefined=progress?{role:'user',content:`<host_execution_progress>\n${progress}\n</host_execution_progress>`,timestamp:Date.now()}:undefined;
-    const withContext = [...(contextMessage ? [contextMessage as AgentMessage] : []),
-      ...(progressMessage ? [progressMessage] : []), ...messages];
+    const progressMessage:UserMessage|undefined=progress?{role:'user',content:`${HOST_PROGRESS_OPEN_TAG}\n${progress}\n</host_execution_progress>`,timestamp:Date.now()}:undefined;
+    // Provider prompt caches match request prefixes. Work state changes with
+    // each mutation and progress with each tool call, so both follow the
+    // transcript: Work state ahead of the current request, progress last.
+    const requestStart = Math.max(lastUserIndex, 0);
+    const withContext = [...messages.slice(0, requestStart),
+      ...(contextMessage ? [contextMessage as AgentMessage] : []),
+      ...messages.slice(requestStart),
+      ...(progressMessage ? [progressMessage] : [])];
     if (estimateAgentMessages(withContext) <= input.budgetTokens) return withContext;
 
     if (!input.conversationCompactor || historicalMessages.length === 0) {
@@ -152,11 +158,11 @@ export function createHarnessContextTransform(input: {
       timestamp: Date.now(),
     };
     const finalMessages = [
-      ...(contextMessage ? [contextMessage as AgentMessage] : []),
       summaryMessage,
       ...retainedDelta,
-      ...(progressMessage?[progressMessage]:[]),
+      ...(contextMessage ? [contextMessage as AgentMessage] : []),
       ...protectedTail,
+      ...(progressMessage?[progressMessage]:[]),
     ];
     const finalTokens = estimateAgentMessages(finalMessages);
     if (finalTokens > input.budgetTokens) {
