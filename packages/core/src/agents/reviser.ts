@@ -172,7 +172,10 @@ function buildRevisionProtocol(mode: ReviseMode, language: "zh" | "en"): string 
     "anti-detect": { en: "Change wording only while preserving story facts and causality.", zh: "只调整文字表面，保持剧情事实和因果。" },
     "spot-fix": { en: "Select only the source line ranges needed for the local request, then replace those ranges while preserving surrounding text.", zh: "先选择局部请求涉及的原文行范围，再替换这些范围，保留范围外正文。" },
   };
+  const expressionContract = language === "en"
+    ? "Source wording is not style authority. Apply the user's target style first, then the Work's style guide, then the active Skill's defaults. Preserve an old voice only when the user has explicitly chosen it. A prose-only revision may change narration, emotional expression, inner speech, sentence structure and paragraphing throughout the requested scope without changing story facts. Planning, inventory and validation language constrain facts; they are not prose templates."
+    : "原文措辞不是文风权威。表达优先服从用户指定的目标文风，其次是作品文风指南，再其次是已激活 Skill 的默认表达；只有用户明确选定的旧口吻才需要保留。只改文字也允许在请求范围内重写叙述、情感表达、心理活动、句式和分段，同时保持剧情事实。规划、账本与验收用语约束事实，不作为正文表达模板。";
   return language === "en"
-    ? `Revise with the activated professional Skill and governed context. ${modes[mode].en} Submit the result through the required tool.`
-    : `按已激活的专业 Skill 和 governed context 修订。${modes[mode].zh}通过指定结果工具提交。`;
+    ? `Revise with the activated professional Skill and governed context. ${modes[mode].en}\n\n${expressionContract}\n\nSubmit the result through the required tool.`
+    : `按已激活的专业 Skill 和 governed context 修订。${modes[mode].zh}\n\n${expressionContract}\n\n通过指定结果工具提交。`;
 }
