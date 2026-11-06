@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface CloudLegadoSourceInput {
   readonly supabaseUrl: string;
   readonly publishableKey?: string;
@@ -34,12 +36,28 @@ export function phoneLegadoCatalogUrl(supabaseUrl: string): string {
   return `${phoneLegadoDir(supabaseUrl)}/books.json`;
 }
 
+const PLAIN_BOOK_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u;
+
+// Supabase Storage rejects object keys outside [A-Za-z0-9_/!.*'() &$=@;:+,?-], so non-ASCII book ids get a stable hashed key.
+export function phoneBookStorageKey(bookId: string): string {
+  if (PLAIN_BOOK_KEY.test(bookId)) return bookId;
+  return `book-${createHash("sha256").update(bookId).digest("hex").slice(0, 16)}`;
+}
+
+export function phoneLegadoBookPath(bookId: string): string {
+  return `legado/books/${phoneBookStorageKey(bookId)}.json`;
+}
+
+export function phoneLegadoChapterPath(bookId: string, chapterNo: number): string {
+  return `legado/books/${phoneBookStorageKey(bookId)}/${chapterNo}.json`;
+}
+
 export function phoneLegadoBookUrl(supabaseUrl: string, bookId: string): string {
-  return `${phoneLegadoDir(supabaseUrl)}/books/${encodeURIComponent(bookId)}.json`;
+  return `${originOf(supabaseUrl)}/storage/v1/object/public/inkos-reader/${phoneLegadoBookPath(bookId)}`;
 }
 
 export function phoneLegadoChapterUrl(supabaseUrl: string, bookId: string, chapterNo: number): string {
-  return `${phoneLegadoDir(supabaseUrl)}/books/${encodeURIComponent(bookId)}/${chapterNo}.json`;
+  return `${originOf(supabaseUrl)}/storage/v1/object/public/inkos-reader/${phoneLegadoChapterPath(bookId, chapterNo)}`;
 }
 
 function escapeHtml(text: string): string {
@@ -77,7 +95,7 @@ export function buildCloudLegadoBookSource(input: CloudLegadoSourceInput): Recor
     bookSourceUrl: phoneLegadoDir(input.supabaseUrl),
     bookSourceGroup: "InkOS",
     bookSourceType: 0,
-    bookSourceComment: "写完一章会推到云端。打开这本书后下拉刷新目录即可看到新章。",
+    bookSourceComment: "写完、修改或删除章节后会自动推到云端。书架下拉刷新即可看到新章。",
     enabled: true,
     enabledExplore: true,
     exploreUrl: `作品::${catalog}`,

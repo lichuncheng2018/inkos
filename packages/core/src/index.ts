@@ -294,16 +294,20 @@ export type {
 } from "./interaction/session-transcript-schema.js";
 export { buildExportArtifact, writeExportArtifact, ChapterExportSourceError } from "./interaction/export-artifact.js";
 export { loadPhoneSyncConfig, type PhoneSyncConfig } from "./publish/phone-sync-config.js";
-export { phoneReaderPublicUrl } from "./publish/phone-reader-html.js";
 export {
   buildCloudLegadoBookSource,
   phoneLegadoSourceUrl,
 } from "./publish/phone-legado.js";
 export {
+  disablePhoneSync,
+  enablePhoneSync,
   queuePhoneSync,
-  syncBookToSupabase,
-  type PhoneSyncResult,
+  readPhoneSyncStatus,
+  startPhoneSyncService,
+  waitForPhoneSyncIdle,
+  type PhoneSyncPhase,
   type PhoneSyncState,
+  type PhoneSyncStatus,
 } from "./publish/phone-sync.js";
 export {
   normalizeTruthFileName,

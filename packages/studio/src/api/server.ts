@@ -123,10 +123,11 @@ import {
   createRemoveNodeTool,
   deleteLatestChapter,
   executeEditTransaction,
-  loadPhoneSyncConfig,
-  phoneLegadoSourceUrl,
-  phoneReaderPublicUrl,
-  syncBookToSupabase,
+  disablePhoneSync,
+  enablePhoneSync,
+  queuePhoneSync,
+  readPhoneSyncStatus,
+  startPhoneSyncService,
   listChapterVersions,
   readChapterPlanDocument,
   readChapterUserBrief,
@@ -1644,6 +1645,10 @@ function broadcast(event: string, data: unknown): void {
   for (const handler of subscribers) {
     handler(event, data);
   }
+}
+
+function warnPhoneSync(message: string): void {
+  console.warn(`[studio] ${message}`);
 }
 
 function deriveBookIdFromTitle(title: string): string {
@@ -3193,6 +3198,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         },
       );
       broadcast("chapter:restored", { bookId: id, chapterNumber: num });
+      queueStudioPhoneSync(id);
       return c.json({ ok: true, chapterNumber: num, versionId: c.req.param("versionId"), result });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
@@ -3208,6 +3214,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const result = await deleteLatestChapter(state, id, { chapterNumber: num });
       broadcast("chapter:deleted", { bookId: id, chapterNumber: result.deletedChapter });
+      queueStudioPhoneSync(id);
       return c.json({ ok: true, ...result });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
@@ -3251,34 +3258,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/books/:id/phone-reader", async (c) => {
     const id = c.req.param("id");
     if (!isSafeBookId(id)) return c.json({ error: "invalid book id" }, 400);
-    const config = await loadPhoneSyncConfig(root);
-    if (!config) return c.json({ configured: false, ok: false });
-    return c.json({
-      configured: true,
-      ok: true,
-      readerUrl: phoneReaderPublicUrl(config.url, id),
-      legadoUrl: phoneLegadoSourceUrl(config.url),
-    });
+    return c.json(await readPhoneSyncStatus({ projectRoot: root, bookId: id }));
   });
 
   app.post("/api/v1/books/:id/phone-reader", async (c) => {
     const id = c.req.param("id");
     if (!isSafeBookId(id)) return c.json({ error: "invalid book id" }, 400);
-    return c.json(await syncBookToSupabase({
-      projectRoot: root,
-      state,
-      bookId: id,
-    }));
+    return c.json(await enablePhoneSync({ projectRoot: root, state, bookId: id, logWarn: warnPhoneSync }));
+  });
+
+  app.delete("/api/v1/books/:id/phone-reader", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "invalid book id" }, 400);
+    return c.json(await disablePhoneSync({ projectRoot: root, state, bookId: id, logWarn: warnPhoneSync }));
   });
 
   function queueStudioPhoneSync(bookId: string): void {
-    void syncBookToSupabase({
-      projectRoot: root,
-      state,
-      bookId,
-    }).then((result) => {
-      if (!result.ok) console.warn(`[studio] phone-sync: ${result.error ?? "failed"}`);
-    });
+    queuePhoneSync({ projectRoot: root, state, bookId, logWarn: warnPhoneSync });
   }
 
   // --- Truth files ---
@@ -5859,6 +5855,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const { rm } = await import("node:fs/promises");
       await rm(bookDir, { recursive: true, force: true });
       broadcast("book:deleted", { bookId: id });
+      queueStudioPhoneSync(id);
       return c.json({ ok: true, bookId: id });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
@@ -6767,6 +6764,12 @@ export async function startStudioServer(
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
 
   const app = createStudioServer(config, root, { hostname: options?.hostname, allowedOrigins: options?.allowedOrigins });
+  startPhoneSyncService({
+    projectRoot: root,
+    state: new StateManager(root),
+    onChange: (bookId) => broadcast("phone-sync:status", { bookId }),
+    logWarn: warnPhoneSync,
+  });
 
   // Serve frontend static files — single process for API + frontend
   if (options?.staticDir) {

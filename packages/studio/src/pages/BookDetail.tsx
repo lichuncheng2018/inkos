@@ -3,7 +3,7 @@ import { copyTextToClipboard } from "../lib/chapter-text";
 import { cloneElement, useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { StringKey, TFunction } from "../hooks/use-i18n";
-import type { SSEMessage } from "../hooks/use-sse";
+import { useNewSSEMessages, type SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -37,21 +37,20 @@ import {
   Trash2,
   Save,
   CircleAlert,
+  Copy,
 } from "lucide-react";
 
-type PhoneReadNotice =
-  | {
-      readonly tone: "success";
-      readonly chaptersSynced: number;
-      readonly sourceUrl: string;
-      readonly copied: boolean;
-      readonly syncedAt: string;
-    }
-  | {
-      readonly tone: "error";
-      readonly message: string;
-      readonly sourceUrl?: string;
-    };
+interface PhoneSyncStatusView {
+  readonly configured: boolean;
+  readonly enabled: boolean;
+  readonly phase: "off" | "pending" | "syncing" | "synced" | "error" | "removing";
+  readonly legadoUrl?: string;
+  readonly chaptersSynced: number;
+  readonly lastChanged?: number;
+  readonly lastSyncedAt?: string;
+  readonly error?: string;
+  readonly retryAt?: string;
+}
 
 interface ChapterMeta {
   readonly number: number;
@@ -138,8 +137,10 @@ export function BookDetail({
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
-  const [phoneSyncing, setPhoneSyncing] = useState(false);
-  const [phoneReadNotice, setPhoneReadNotice] = useState<PhoneReadNotice | null>(null);
+  const [phoneStatus, setPhoneStatus] = useState<PhoneSyncStatusView | null>(null);
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneNotice, setPhoneNotice] = useState<string | null>(null);
+  const [phoneCopy, setPhoneCopy] = useState<"copied" | "failed" | null>(null);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const latestPersistedChapter = data ? data.nextChapter - 1 : 0;
@@ -314,59 +315,112 @@ export function BookDetail({
     }
   };
 
-  const handlePhoneRead = useCallback(async () => {
-    setPhoneSyncing(true);
+  const refreshPhoneStatus = useCallback(async () => {
     try {
-      const result = await fetchJson<{
-        configured?: boolean;
-        ok?: boolean;
-        chaptersSynced?: number;
-        legadoUrl?: string;
-        readerUrl?: string;
-        error?: string;
-      }>(`/books/${bookId}/phone-reader`, { method: "POST" });
-      if (!result.configured) {
-        setPhoneReadNotice({ tone: "error", message: t("book.phoneReadNotConfigured") });
-        return;
-      }
-      const sourceUrl = result.legadoUrl ?? result.readerUrl ?? "";
-      const copied = sourceUrl ? await copyTextToClipboard(sourceUrl) : false;
-      if (result.error || result.ok === false) {
-        setPhoneReadNotice({
-          tone: "error",
-          message: result.error ?? t("book.phoneReadFailed"),
-          sourceUrl: sourceUrl || undefined,
-        });
-        return;
-      }
-      setPhoneReadNotice({
-        tone: "success",
-        chaptersSynced: result.chaptersSynced ?? 0,
-        sourceUrl,
-        copied,
-        syncedAt: new Date().toLocaleString(),
-      });
-    } catch (e) {
-      setPhoneReadNotice({
-        tone: "error",
-        message: e instanceof Error ? e.message : t("book.phoneReadFailed"),
-      });
-    } finally {
-      setPhoneSyncing(false);
+      setPhoneStatus(await fetchJson<PhoneSyncStatusView>(`/books/${bookId}/phone-reader`));
+    } catch {
+      // The status icon is advisory; the button keeps working without it.
     }
-  }, [bookId, t]);
+  }, [bookId]);
 
-  const phoneReadTooltipText = useMemo(() => {
-    if (!phoneReadNotice) return "";
-    if (phoneReadNotice.tone === "success") {
-      const head = t("book.phoneReadSyncSuccess")
-        .replace("{count}", String(phoneReadNotice.chaptersSynced))
-        .replace("{time}", phoneReadNotice.syncedAt);
-      const copyHint = phoneReadNotice.copied ? t("book.phoneReadCopied") : t("book.phoneReadSyncedManualCopy");
-      return [head, copyHint, phoneReadNotice.sourceUrl].filter(Boolean).join("\n");
+  useEffect(() => {
+    setPhoneStatus(null);
+    setPhoneNotice(null);
+    setPhoneCopy(null);
+    void refreshPhoneStatus();
+  }, [refreshPhoneStatus]);
+
+  const handlePhoneSyncEvent = useCallback((message: SSEMessage) => {
+    if (message.event !== "phone-sync:status") return;
+    if ((message.data as { bookId?: string } | null)?.bookId !== bookId) return;
+    void refreshPhoneStatus();
+  }, [bookId, refreshPhoneStatus]);
+  useNewSSEMessages(sse.messages, handlePhoneSyncEvent);
+
+  const phoneActive = phoneStatus?.phase === "pending" || phoneStatus?.phase === "syncing" || phoneStatus?.phase === "removing";
+  useEffect(() => {
+    if (!phoneActive) return;
+    const timer = window.setInterval(() => void refreshPhoneStatus(), 4000);
+    return () => window.clearInterval(timer);
+  }, [phoneActive, refreshPhoneStatus]);
+
+  const phoneLocked = phoneBusy || phoneStatus?.phase === "syncing";
+
+  const handlePhoneRead = useCallback(async () => {
+    // Copy before any await: browsers only allow clipboard writes right after the click.
+    const knownUrl = phoneStatus?.legadoUrl;
+    const copying = knownUrl ? copyTextToClipboard(knownUrl) : null;
+    setPhoneBusy(true);
+    setPhoneNotice(null);
+    try {
+      const next = await fetchJson<PhoneSyncStatusView>(`/books/${bookId}/phone-reader`, { method: "POST" });
+      setPhoneStatus(next);
+      if (!next.configured) {
+        setPhoneCopy(null);
+        setPhoneNotice(t("book.phoneReadNotConfigured"));
+        return;
+      }
+      const copied = copying ? await copying : next.legadoUrl ? await copyTextToClipboard(next.legadoUrl) : false;
+      setPhoneCopy(copied ? "copied" : "failed");
+    } catch (e) {
+      setPhoneNotice(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPhoneBusy(false);
     }
-    return [phoneReadNotice.message, phoneReadNotice.sourceUrl].filter(Boolean).join("\n");
-  }, [phoneReadNotice, t]);
+  }, [bookId, phoneStatus?.legadoUrl, t]);
+
+  const handleCopyPhoneLink = useCallback(async () => {
+    if (!phoneStatus?.legadoUrl) return;
+    setPhoneCopy((await copyTextToClipboard(phoneStatus.legadoUrl)) ? "copied" : "failed");
+  }, [phoneStatus?.legadoUrl]);
+
+  const handleStopPhoneRead = useCallback(async () => {
+    setPhoneBusy(true);
+    setPhoneNotice(null);
+    setPhoneCopy(null);
+    try {
+      setPhoneStatus(await fetchJson<PhoneSyncStatusView>(`/books/${bookId}/phone-reader`, { method: "DELETE" }));
+    } catch (e) {
+      setPhoneNotice(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPhoneBusy(false);
+    }
+  }, [bookId]);
+
+  const phoneTooltipText = useMemo(() => {
+    const lines: string[] = [];
+    if (phoneNotice) lines.push(phoneNotice);
+    const status = phoneStatus;
+    if (status && (status.enabled || status.phase === "removing")) {
+      if (status.phase === "syncing") lines.push(t("book.phoneReadSyncing"));
+      if (status.phase === "pending") lines.push(t("book.phoneReadPending"));
+      if (status.phase === "removing") lines.push(t("book.phoneReadRemoving"));
+      if (status.phase === "error") {
+        lines.push(t("book.phoneReadFailed").replace("{error}", status.error ?? ""));
+        if (status.retryAt) {
+          lines.push(t("book.phoneReadRetry").replace("{time}", new Date(status.retryAt).toLocaleTimeString()));
+        }
+      }
+      if (status.phase === "synced") {
+        lines.push(t("book.phoneReadSynced")
+          .replace("{time}", status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString() : "")
+          .replace("{count}", String(status.chaptersSynced)));
+        if (status.lastChanged) lines.push(t("book.phoneReadChanged").replace("{count}", String(status.lastChanged)));
+      }
+    }
+    if (phoneCopy === "copied") lines.push(t("book.phoneReadCopied"));
+    if (phoneCopy === "failed") lines.push(t("book.phoneReadCopyFailed"));
+    if (lines.length > 0 && status?.enabled && status.legadoUrl) {
+      lines.push(t("book.phoneReadSource").replace("{url}", status.legadoUrl));
+    }
+    return lines.join("\n");
+  }, [phoneCopy, phoneNotice, phoneStatus, t]);
+
+  const phoneIconClass = phoneNotice || phoneStatus?.phase === "error"
+    ? "text-destructive"
+    : phoneStatus?.phase === "synced"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : "text-amber-600 dark:text-amber-400";
 
   const handleReviseFoundation = async () => {
     const feedback = window.prompt(
@@ -544,28 +598,31 @@ export function BookDetail({
               {t("book.export")}
             </button>
             <TooltipProvider delay={200}>
-              <div className="inline-flex items-center">
+              <div className="inline-flex items-stretch">
+                {/* aria-disabled instead of disabled: a disabled button swallows hover, hiding the status tooltip. */}
                 <button
                   type="button"
-                  onClick={() => void handlePhoneRead()}
-                  disabled={phoneSyncing}
-                  className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50 disabled:opacity-50"
+                  onClick={() => {
+                    if (!phoneLocked) void handlePhoneRead();
+                  }}
+                  aria-disabled={phoneLocked}
+                  title={phoneStatus?.enabled ? undefined : t("book.phoneReadEnableHint")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary transition-all border border-border/50",
+                    phoneStatus?.configured ? "rounded-l-lg" : "rounded-lg",
+                    phoneLocked && "opacity-60 cursor-default",
+                  )}
                 >
                   <Smartphone size={14} />
-                  {phoneSyncing ? t("common.loading") : t("book.phoneRead")}
-                  {phoneReadNotice ? (
+                  {phoneLocked ? t("book.phoneReadSyncing") : t("book.phoneRead")}
+                  {phoneTooltipText ? (
                     <Tooltip>
                       <TooltipTrigger
                         render={
                           <span
                             role="img"
-                            aria-label={phoneReadTooltipText}
-                            className={cn(
-                              "inline-flex rounded-sm p-0.5 -mr-1 cursor-help",
-                              phoneReadNotice.tone === "error"
-                                ? "text-destructive"
-                                : "text-amber-600 dark:text-amber-400",
-                            )}
+                            aria-label={phoneTooltipText}
+                            className={cn("inline-flex rounded-sm p-0.5 -mr-1 cursor-help", phoneIconClass)}
                             onPointerDown={(event) => event.stopPropagation()}
                             onClick={(event) => {
                               event.preventDefault();
@@ -581,11 +638,37 @@ export function BookDetail({
                         align="end"
                         className="max-w-md whitespace-pre-wrap text-xs leading-5"
                       >
-                        {phoneReadTooltipText}
+                        {phoneTooltipText}
                       </TooltipContent>
                     </Tooltip>
                   ) : null}
                 </button>
+                {phoneStatus?.configured ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      aria-label={t("book.phoneReadMenu")}
+                      className="flex items-center px-1.5 text-muted-foreground bg-secondary/50 rounded-r-lg border border-l-0 border-border/50 outline-none hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                    >
+                      <ChevronDown size={12} />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-auto min-w-48">
+                      <DropdownMenuItem onClick={() => void handleCopyPhoneLink()}>
+                        <Copy size={14} />
+                        {t("book.phoneReadCopyLink")}
+                      </DropdownMenuItem>
+                      {phoneStatus.enabled ? (
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={phoneBusy}
+                          onClick={() => void handleStopPhoneRead()}
+                        >
+                          <Trash2 size={14} />
+                          {t("book.phoneReadStop")}
+                        </DropdownMenuItem>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
               </div>
             </TooltipProvider>
           </div>

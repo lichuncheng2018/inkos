@@ -6,9 +6,11 @@ import {
   buildCloudLegadoBookSource,
   buildCloudLegadoBookSourceFile,
   buildLegadoChapterFile,
+  phoneBookStorageKey,
+  phoneLegadoBookUrl,
+  phoneLegadoChapterUrl,
   phoneLegadoSourceUrl,
 } from "../publish/phone-legado.js";
-import { buildPhoneReaderHtml, phoneReaderPublicUrl } from "../publish/phone-reader-html.js";
 import { loadPhoneSyncConfig } from "../publish/phone-sync-config.js";
 
 describe("phone reader", () => {
@@ -24,9 +26,17 @@ describe("phone reader", () => {
     restoreEnv("INKOS_SUPABASE_SERVICE_ROLE_KEY", previous.service);
   });
 
-  it("builds a public reader URL from the storage object", () => {
-    expect(phoneReaderPublicUrl("https://example.supabase.co/", "xiuxian-also-science")).toBe(
-      "https://example.supabase.co/storage/v1/object/public/inkos-reader/index.html#xiuxian-also-science",
+  it("keeps ASCII book ids in storage paths and hashes ids Supabase Storage would reject", () => {
+    expect(phoneBookStorageKey("xiuxian-also-science")).toBe("xiuxian-also-science");
+    const key = phoneBookStorageKey("测试导入");
+    expect(key).toMatch(/^book-[0-9a-f]{16}$/);
+    expect(phoneBookStorageKey("测试导入")).toBe(key);
+    expect(phoneBookStorageKey("修仙-每日翻倍-先苟成老祖")).not.toBe(key);
+    expect(phoneLegadoBookUrl("https://example.supabase.co/", "测试导入")).toBe(
+      `https://example.supabase.co/storage/v1/object/public/inkos-reader/legado/books/${key}.json`,
+    );
+    expect(phoneLegadoChapterUrl("https://example.supabase.co", "测试导入", 3)).toBe(
+      `https://example.supabase.co/storage/v1/object/public/inkos-reader/legado/books/${key}/3.json`,
     );
   });
 
@@ -52,16 +62,6 @@ describe("phone reader", () => {
     expect(JSON.stringify(source)).not.toContain("{{$.");
     expect(buildCloudLegadoBookSourceFile({ supabaseUrl: "https://example.supabase.co" }).startsWith("[{")).toBe(true);
     expect(buildLegadoChapterFile("雨水落在旧码头。")).toBe(JSON.stringify({ content: "雨水落在旧码头。" }));
-  });
-
-  it("embeds PostgREST chapter reads, not the service role", () => {
-    const html = buildPhoneReaderHtml({
-      supabaseUrl: "https://example.supabase.co",
-      publishableKey: "sb_publishable_test",
-    });
-    expect(html).toContain("inkos_chapters?book_id=eq.");
-    expect(html).toContain("sb_publishable_test");
-    expect(html).not.toContain("service_role");
   });
 
   it("loads config from env, then from .inkos/supabase.json", async () => {

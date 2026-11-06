@@ -54,6 +54,7 @@ export const STUDIO_SSE_EVENTS = [
   "radar:start",
   "radar:complete",
   "radar:error",
+  "phone-sync:status",
   "log",
   "llm:progress",
   "ping",
