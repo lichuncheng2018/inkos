@@ -33,5 +33,9 @@ worlds/
 dramas/
 storyboards/
 translations/
+radar/
 inkos.json
 CLAUDE.md
+
+# Supabase CLI 本地关联状态
+supabase/.temp/
