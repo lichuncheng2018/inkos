@@ -1,5 +1,5 @@
-import type { EndpointGroup } from "../store/service/types";
-import { tr } from "../lib/app-language";
+import type { EndpointGroup } from "../store/service/types.js";
+import { tr } from "../lib/app-language.js";
 
 export const GROUP_ORDER: ReadonlyArray<EndpointGroup> = [
   "aggregator",

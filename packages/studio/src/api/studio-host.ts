@@ -67,7 +67,8 @@ export function listLanIpv4Addresses(): string[] {
   const addresses: string[] = [];
   for (const addrs of Object.values(networkInterfaces())) {
     for (const addr of addrs ?? []) {
-      const family = addr.family;
+      // Node 18.0-18.3 reported the family as a number.
+      const family = addr.family as string | number;
       const ipv4 = family === "IPv4" || family === 4;
       if (!ipv4 || addr.internal || addr.address.startsWith("169.254.")) continue;
       addresses.push(addr.address);
