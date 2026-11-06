@@ -2,8 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendActivatedSkillGuidance } from "../agents/base.js";
+import { appendActivatedSkillGuidance, prepareWorkerMessages } from "../agents/base.js";
 import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
+import { withExecutionEvidence } from "../harness/execution-evidence.js";
+import { createLLMClient } from "../llm/provider.js";
 import { createSkillRegistry, loadAvailableAgentSkills } from "../skills/index.js";
 import {
   applyRequiredProfileSkills,
@@ -137,6 +139,43 @@ describe("AgentSkills registry", () => {
       "inkos-long-writing",
       "inkos-fanfic-writing",
     ]);
+  });
+
+  it("writes Chinese xuanhuan prose Works in the Sankai voice without affecting other Works", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-genre-voice-"));
+    try {
+      const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: "https://example.invalid/v1", apiKey: "fixture", apiFormat: "chat", stream: true, temperature: 0, thinkingBudget: 0 });
+      const writerPrompt = async (metadata: Record<string, unknown>, language = "zh", profileId = "longform-novel") => {
+        const work = createWorkManifest({ id: "voice-work", title: "Voice Work", profileId, language, metadata });
+        const applied: string[] = [];
+        const messages = await withExecutionEvidence(
+          (type, payload) => {
+            if (type === "skills-applied") applied.push(...(payload.skills as Array<{ id: string }>).map((skill) => skill.id));
+          },
+          () => prepareWorkerMessages({ client, projectRoot: root }, [{ role: "user", content: "写下一章。" }], 128, "writer"),
+          createBuiltInWorkProfileRegistry().require(profileId),
+          work,
+        );
+        return { applied, text: messages.map((message) => message.content).join("\n") };
+      };
+
+      const xianxia = await writerPrompt({ genre: "传统玄幻修仙/系统爽文" });
+      expect(xianxia.applied).toEqual(["inkos-long-writing", "inkos-sankai-style"]);
+      expect(xianxia.text).toContain("# 三开流玄幻文风");
+      expect((await writerPrompt({ genre: "xuanhuan", creationKind: "imitation" })).applied)
+        .toEqual(["inkos-long-writing", "inkos-imitation-writing", "inkos-sankai-style"]);
+
+      for (const other of [
+        await writerPrompt({ genre: "都市重生、科技创业、系统流" }),
+        await writerPrompt({ genre: "xianxia" }, "en"),
+        await writerPrompt({ genre: "玄幻" }, "zh", "interactive-film"),
+      ]) {
+        expect(other.applied).not.toContain("inkos-sankai-style");
+        expect(other.text).not.toContain("三开流玄幻文风");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("fails loudly when a required professional skill is unavailable", () => {

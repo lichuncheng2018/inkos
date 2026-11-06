@@ -24,11 +24,23 @@ const WORK_CREATION_SKILLS: Readonly<Record<string, string>> = {
   imitation: "inkos-imitation-writing",
 };
 
+const PROSE_PROFILE_IDS: ReadonlySet<string> = new Set(["longform-novel", "short-fiction"]);
+
+const CHINESE_GENRE_VOICE_SKILLS: ReadonlyArray<{ readonly genre: RegExp; readonly skillId: string }> = [
+  { genre: /玄幻|修仙|仙侠|修真|高武|xuanhuan|xianxia|cultivation/i, skillId: "inkos-sankai-style" },
+];
+
+function genreVoiceSkillIds(work: WorkManifest): string[] {
+  const genre = work.metadata.genre;
+  if (typeof genre !== "string" || !PROSE_PROFILE_IDS.has(work.profileId) || !/^zh/i.test(work.language)) return [];
+  return CHINESE_GENRE_VOICE_SKILLS.filter((voice) => voice.genre.test(genre)).map((voice) => voice.skillId);
+}
+
 export function requiredWorkSkillIds(work: WorkManifest | null): string[] {
-  const creationKind = work?.metadata.creationKind;
-  if (typeof creationKind !== "string") return [];
-  const skillId = WORK_CREATION_SKILLS[creationKind];
-  return skillId ? [skillId] : [];
+  if (!work) return [];
+  const creationKind = work.metadata.creationKind;
+  const creationSkillId = typeof creationKind === "string" ? WORK_CREATION_SKILLS[creationKind] : undefined;
+  return [...(creationSkillId ? [creationSkillId] : []), ...genreVoiceSkillIds(work)];
 }
 
 export function resolveWorkSkillActivations(

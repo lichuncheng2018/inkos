@@ -21,6 +21,7 @@ const BUILTIN_SKILL_IDS = [
   "inkos-long-writing",
   "inkos-play-illustration",
   "inkos-play-world",
+  "inkos-sankai-style",
   "inkos-script-writing",
   "inkos-short-market-research",
   "inkos-short-story-analysis",
