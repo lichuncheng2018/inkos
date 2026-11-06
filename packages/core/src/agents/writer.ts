@@ -2,7 +2,7 @@ import { BaseAgent } from "./base.js";
 import {renderChapterDocument} from '../utils/chapter-document.js';
 import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
-import { buildWriterSystemPrompt } from "./writer-prompts.js";
+import { buildWriterSystemPrompt, buildSankaiStyleWriterPrompt } from "./writer-prompts.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prompts.js";
 import { createSettlementToolSchema, normalizeSettlementSubmission, validateSettlementHookIds } from "./settler-tool.js";
 import { ChapterDraftToolSchema } from "./writer-tool.js";
@@ -116,7 +116,7 @@ export class WriterAgent extends BaseAgent {
       throw new Error("Writer requires governed chapter intent, memo, and context package.");
     }
     // ── Phase 1: Creative writing (temperature 0.7) ──
-    const creativeSystemPrompt = buildWriterSystemPrompt(
+    const creativeSystemPrompt = buildSankaiStyleWriterPrompt(
       book, bookRules, bookRulesBody, styleGuide,
       resolvedLanguage,
       resolvedLengthSpec,
