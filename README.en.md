@@ -121,7 +121,7 @@ inkos interact --json --message "continue the current book, but keep the pacing 
 
 This routes through the same conversation executor used by the project TUI, so OpenClaw, TUI, and Studio stay on the same control brain. The current JSON output includes assistant response text and the interaction session; real completion should still be derived from tool results and files, not from prose claims.
 
-Atomic commands (`plan chapter` / `compose chapter` / `draft` / `audit` / `revise` / `write next`) are still available, but they are now lower-level tools rather than the preferred OpenClaw entry. You can also browse it on [ClawHub](https://clawhub.ai) by searching `inkos`.
+Explicit commands (`write next` / `revise` / `review` / `export`) remain directly callable for scripts and advanced users, but they are lower-level tools rather than the preferred OpenClaw entry; internal planning and context stages are orchestrated by the Harness. You can also browse it on [ClawHub](https://clawhub.ai) by searching `inkos`.
 
 ### Agent Skills
 
@@ -261,14 +261,14 @@ If a service test fails, first check that the service, model, and protocol match
 English is the default for English genre profiles. Pick a genre and go:
 
 ```bash
-inkos book create --title "The Last Delver" --genre litrpg     # LitRPG novel (English by default)
+inkos book create --title "The Last Delver" --genre litrpg --lang en   # English LitRPG novel
 inkos write next my-book          # Write and persist the next chapter; review and revision remain explicit actions
 inkos status                      # Check status
 inkos review my-book              # Inspect persisted review observations
 inkos export my-book --format epub  # Export EPUB (read on phone/Kindle)
 ```
 
-Language is set per-genre by default. Override explicitly with `--lang en` or `--lang zh`. Use `inkos genre list` to see all available genres and their default languages.
+The writing language defaults to the project language set by `inkos init --lang` (`zh` unless you pass `--lang en`). Override it per book with `--lang en` or `--lang zh`.
 
 ### Write Complete Short Fiction
 
@@ -356,11 +356,13 @@ The reviewer compares the artifact with user intent, canon, current state, chapt
 
 ### Style Cloning
 
-`inkos style analyze` uses the activated analysis and imitation Skills to compile an evidence-backed operational style guide. `inkos style import` binds that guide to a Work for writing and revision.
+`inkos style import <reference> [id]` uses the activated analysis and imitation Skills to compile reference text into an evidence-backed operational style guide, saved as the Work's `story/style_guide.md` for writing and revision.
 
 ### Creative Brief
 
-`inkos book create --brief my-ideas.md` passes brainstorming notes, worldbuilding, or character sheets. Architect creates `outline/story_frame.md`, `outline/volume_map.md`, role cards, and `book_rules.md/json`, while preserving long-horizon direction in `story/author_intent.md`.
+`inkos book create --brief my-ideas.md` passes brainstorming notes, worldbuilding, or character sheets. Architect creates `outline/story_frame.md`, `outline/volume_map.md`, role cards, and `book_rules.md/json`. The brief is kept verbatim as `story/brief.md` and also seeds `story/author_intent.md`. Author intent reaches planning and writing in full for every chapter, so for a long brief pass a condensed long-term intent with `--author-intent <file>`, and the focus for the first one to three chapters with `--current-focus <file>`.
+
+In Studio Chat, upload the brief and ask to create the book from it as written. The agent references the uploaded file in the creation parameters, so the brief reaches Architect verbatim, followed by any extra requests confirmed in the conversation.
 
 ### Input Governance Control Surface
 
@@ -532,11 +534,10 @@ The first image is a local Studio screenshot. The other images are real local ou
 | Command | Description |
 |---------|-------------|
 | `inkos init [name]` | Initialize project (omit name to init current directory) |
-| `inkos book create` | Create a new book (`--genre`, `--chapter-words`, `--target-chapters`, `--brief <file>`, `--lang en/zh`) |
+| `inkos book create` | Create a new book (`--genre`, `--chapter-words`, `--target-chapters`, `--brief <file>`, `--author-intent <file>`, `--current-focus <file>`, `--lang en/zh`) |
 | `inkos book update [id]` | Update book settings (`--chapter-words`, `--target-chapters`, `--status`, `--lang`) |
 | `inkos book list` | List all books |
 | `inkos book delete <id>` | Delete a book and all its data (`--force` to skip confirmation) |
-| `inkos genre list/show/copy/create` | View, copy, or create genres |
 | `inkos write next [id]` | Full pipeline: write next chapter (`--words` to override, `--count` for batch, `-q` quiet mode) |
 | `inkos write rewrite [id] <n>` | Rewrite chapter N (restores state snapshot, `--force` to skip confirmation) |
 | `inkos revise [id] [n]` | Revise a specific chapter |
@@ -557,8 +558,7 @@ The first image is a local Studio screenshot. The other images are real local ou
 | `inkos config show-models` | Show current model routing |
 | `inkos doctor` | Diagnose setup issues (API connectivity test + provider compatibility hints) |
 | `inkos detect [id] [n]` | AIGC detection (`--all` for all chapters, `--stats` for statistics) |
-| `inkos style analyze <file>` | Analyze reference text to extract style fingerprint |
-| `inkos style import <file> [id]` | Import style fingerprint into a book |
+| `inkos style import <file> [id]` | Compile reference text into a style guide for a book (`story/style_guide.md`) |
 | `inkos import canon [id] --from <parent>` | Import parent canon into a spinoff book |
 | `inkos import chapters [id] --from <path>` | Import existing chapters for continuation (`--split`, `--resume-from`) |
 | `inkos analytics [id]` / `inkos stats [id]` | Book analytics (observations, chapter lengths, token usage) |
@@ -567,7 +567,7 @@ The first image is a local Studio screenshot. The other images are real local ou
 | `inkos tui` | Start terminal full-screen TUI |
 | `inkos up / down` | Start/stop daemon (`-q` quiet mode, auto-writes `inkos.log`) |
 
-`[id]` is auto-detected when the project has one book. `write next` accepts `--context` for steering and `--words` for target length; `book create` accepts `--brief <file>`. Internal intent, context, and trace artifacts are inspectable in Studio.
+`[id]` is auto-detected when the project has one book. `write next` accepts `--context` for steering and `--words` for target length; `book create` accepts `--brief <file>`, plus `--author-intent <file>` and `--current-focus <file>` for the initial control documents. Internal intent, context, and trace artifacts are inspectable in Studio.
 
 The CLI also accepts one-off LLM override flags at runtime: `--service`, `--model`, `--api-key-env`, `--base-url`, `--api-format <chat|responses>`, `--stream`, `--no-stream`. For example:
 

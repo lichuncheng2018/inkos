@@ -286,6 +286,7 @@ export function createProductionCapabilityRegistry(
       ]
     : [confirmedAction(createBookFoundationTool(environment.pipeline, {
         actionPayload: environment.actionPayload,
+        projectRoot: environment.projectRoot,
         language: lang,
         activeSkills: environment.activeSkills,
         workerSkills: environment.workerSkills,

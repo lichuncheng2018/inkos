@@ -113,7 +113,7 @@ npm でインストール済み、またはリポジトリをクローン済み�
 inkos interact --json --message "continue the current book, but keep the pacing tighter"
 ```
 
-この入口はプロジェクト TUI と同じ会話実行カーネルを使います。現在の JSON 出力には assistant の返信と interaction session が含まれます。実際に完了したかどうかは、モデルの文章ではなく、ツール結果と生成ファイルで判断します。`plan` / `compose` / `draft` / `audit` / `revise` / `write next` などのアトミックコマンドも、スクリプトや上級者向けの下位ツールとして残っています。
+この入口はプロジェクト TUI と同じ会話実行カーネルを使います。現在の JSON 出力には assistant の返信と interaction session が含まれます。実際に完了したかどうかは、モデルの文章ではなく、ツール結果と生成ファイルで判断します。`write next` / `revise` / `review` / `export` などの明示コマンドも、スクリプトや上級者向けに引き続き直接呼び出せます。内部の計画とコンテキスト段階は Harness がまとめて編成します。
 
 ### 設定
 
@@ -202,17 +202,17 @@ inkos config show-models        # 現在のルーティングを表示
 
 ### 最初の本を書く
 
-英語ジャンルプロファイルではデフォルトで英語が使用されます。ジャンルを選んで始めましょう：
+英語で書く場合は `--lang en` を付けます：
 
 ```bash
-inkos book create --title "The Last Delver" --genre litrpg     # LitRPG小説（デフォルトで英語）
+inkos book create --title "The Last Delver" --genre litrpg --lang en   # 英語の LitRPG 小説
 inkos write next my-book          # 次章を執筆・保存（レビューと改稿は明示的な操作）
 inkos status                      # ステータスを確認
 inkos review my-book              # 保存済み review observation を確認
 inkos export my-book --format epub  # EPUB形式でエクスポート（スマホ/Kindleで読める）
 ```
 
-言語はジャンルごとにデフォルトで設定されます。`--lang en` または `--lang zh` で明示的に上書き可能です。`inkos genre list` で利用可能なすべてのジャンルとデフォルト言語を確認できます。
+執筆言語の既定値は `inkos init --lang` で設定したプロジェクト言語です（指定しなければ `zh`）。書籍ごとに `--lang en` または `--lang zh` で上書きできます。
 
 ### 完成短編を書く
 
@@ -304,11 +304,13 @@ Play は、キャラクター、場所、アイテム、証拠、関係性、時
 
 ### 文体クローニング
 
-`inkos style analyze` は分析・模倣 Skill を使い、参考テキストを証拠付きの実行可能な文体ガイドへコンパイルします。`inkos style import` でガイドを作品に紐づけます。
+`inkos style import <参考テキスト> [id]` は分析・模倣 Skill を使い、参考テキストを証拠付きの実行可能な文体ガイドへコンパイルして、作品の `story/style_guide.md` に保存します。
 
 ### クリエイティブブリーフ
 
-`inkos book create --brief my-ideas.md` はブレインストーミング、世界観、キャラクター資料を渡します。Architect は `outline/story_frame.md`、`outline/volume_map.md`、役割カード、`book_rules.md/json` を作成し、長期方向を `story/author_intent.md` に保存します。
+`inkos book create --brief my-ideas.md` はブレインストーミング、世界観、キャラクター資料を渡します。Architect は `outline/story_frame.md`、`outline/volume_map.md`、役割カード、`book_rules.md/json` を作成します。ブリーフは原文のまま `story/brief.md` に保存され、`story/author_intent.md` の初期内容にもなります。作者意図は毎章の計画と執筆に全文で渡されるため、長いブリーフでは `--author-intent <file>` で簡潔な長期意図を、`--current-focus <file>` で序盤 1〜3 章の焦点を別に指定できます。
+
+Studio Chat では、ブリーフファイルをアップロードして原文どおりに書籍を作るよう依頼すると、Agent が作成パラメータでそのファイルを参照し、ブリーフはそのまま Architect に渡されます。会話で追加確認した要望はブリーフの後ろに付け加えられます。
 
 ### 入力ガバナンスコントロールサーフェス
 
@@ -478,11 +480,10 @@ Studio の **Open World** と **Branching Interactive** は、先に書籍を作
 | コマンド | 説明 |
 |---------|------|
 | `inkos init [name]` | プロジェクトを初期化（nameを省略するとカレントディレクトリを初期化） |
-| `inkos book create` | 新しい書籍を作成（`--genre`、`--chapter-words`、`--target-chapters`、`--brief <file>`、`--lang en/zh`） |
+| `inkos book create` | 新しい書籍を作成（`--genre`、`--chapter-words`、`--target-chapters`、`--brief <file>`、`--author-intent <file>`、`--current-focus <file>`、`--lang en/zh`） |
 | `inkos book update [id]` | 書籍設定を更新（`--chapter-words`、`--target-chapters`、`--status`、`--lang`） |
 | `inkos book list` | すべての書籍を一覧表示 |
 | `inkos book delete <id>` | 書籍とそのすべてのデータを削除（`--force` で確認をスキップ） |
-| `inkos genre list/show/copy/create` | ジャンルの表示、コピー、作成 |
 | `inkos write next [id]` | フルパイプライン：次の章を執筆（`--words` でオーバーライド、`--count` でバッチ、`-q` クワイエットモード） |
 | `inkos write rewrite [id] <n>` | 第N章をリライト（ステートスナップショットを復元、`--force` で確認をスキップ） |
 | `inkos revise [id] [n]` | 特定の章を修正 |
@@ -500,8 +501,7 @@ Studio の **Open World** と **Branching Interactive** は、先に書籍を作
 | `inkos config show-models` | 現在のモデルルーティングを表示 |
 | `inkos doctor` | セットアップの問題を診断（API接続テスト + プロバイダー互換性ヒント） |
 | `inkos detect [id] [n]` | AIGC検出（`--all` で全章、`--stats` で統計） |
-| `inkos style analyze <file>` | 参考テキストを分析してスタイルフィンガープリントを抽出 |
-| `inkos style import <file> [id]` | スタイルフィンガープリントを書籍にインポート |
+| `inkos style import <file> [id]` | 参考テキストを文体ガイドにコンパイルして書籍に保存（`story/style_guide.md`） |
 | `inkos import canon [id] --from <parent>` | 番外 / スピンオフ用に親作品の正典を導入 |
 | `inkos import chapters [id] --from <path>` | 続編執筆用に既存の章をインポート（`--split`、`--resume-from`） |
 | `inkos analytics [id]` / `inkos stats [id]` | 書籍分析（observation、章の長さ、トークン使用量） |
@@ -510,7 +510,7 @@ Studio の **Open World** と **Branching Interactive** は、先に書籍を作
 | `inkos tui` | 端末フルスクリーン TUI を起動 |
 | `inkos up / down` | デーモンの開始/停止（`-q` クワイエットモード、`inkos.log` に自動出力） |
 
-`[id]` はプロジェクトに書籍が1つしかない場合に自動検出されます。すべてのコマンドが `--json` による構造化出力に対応。`draft` / `write next` / `plan chapter` / `compose chapter` は `--context` でステアリング可能、`--words` で目標章サイズをオーバーライド。`book create` は `--brief <file>` でクリエイティブブリーフを渡せます — アーキテクトがゼロから生成するのではなく、あなたのアイデアを基に構築します。`plan chapter` は LLM を呼び出して章の意図を作成します。`compose chapter` はライブLLMを必要としないため、APIセットアップ完了前でも管理された入力を確認できます。
+`[id]` はプロジェクトに書籍が1つしかない場合に自動検出されます。すべてのコマンドが `--json` による構造化出力に対応。`write next` は `--context` でステアリング可能、`--words` で目標章サイズをオーバーライド。`book create` は `--brief <file>` でクリエイティブブリーフを渡せます — アーキテクトがゼロから生成するのではなく、あなたのアイデアを基に構築します。`--author-intent <file>` と `--current-focus <file>` で長期の作者意図と序盤の焦点も同時に書き込めます。内部の Planner / Composer が生成する intent・context・trace は Studio で確認できます。
 
 ## ロードマップ
 

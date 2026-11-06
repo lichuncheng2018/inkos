@@ -41,6 +41,7 @@ export const CreateBookActionPayloadSchema = z.object({
   chapterWordCount: z.number().int().min(1).optional(),
   minChapterLength:z.number().int().min(1).optional(),
   maxChapterLength:z.number().int().min(1).optional(),
+  briefPath: z.string().trim().min(1).optional(),
 }).strict();
 
 export const WriteNextActionPayloadSchema = z.object({

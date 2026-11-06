@@ -368,11 +368,13 @@ Play 维护一个可持续推进的世界状态：角色、地点、物品、证
 
 ### 文风仿写
 
-`inkos style analyze` 按激活的分析与仿写 Skill，把参考文本编译为有证据的可执行文风指南；`inkos style import` 将指南绑定到指定作品，供后续写作与修订按需使用。
+`inkos style import <参考文本> [id]` 按激活的分析与仿写 Skill，把参考文本编译为有证据的可执行文风指南，写入该作品的 `story/style_guide.md`，供后续写作与修订按需使用。
 
 ### 创作简报
 
-`inkos book create --brief my-ideas.md` 传入你的脑洞、世界观设定或人设文档。Architect 基于简报生成 `outline/story_frame.md`、`outline/volume_map.md`、角色卡和 `book_rules.md/json`，并把长期方向保存到 `story/author_intent.md`。
+`inkos book create --brief my-ideas.md` 传入你的脑洞、世界观设定或人设文档。Architect 基于简报生成 `outline/story_frame.md`、`outline/volume_map.md`、角色卡和 `book_rules.md/json`；简报原文保存为 `story/brief.md`，并默认作为 `story/author_intent.md` 的初始内容。作者意图每章都会全文进入规划和写作，简报较长时可以用 `--author-intent <file>` 另给一份精简的长期意图，用 `--current-focus <file>` 写明开篇 1–3 章的重点。
+
+在 Studio Chat 建书时，上传简报文件并要求按原文建书，Agent 会在建书参数中引用这个上传文件，简报原样交给 Architect，对话中另外确认的要求附在简报之后。
 
 ### 输入治理控制面
 
@@ -559,11 +561,10 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | 命令                                          | 说明                                                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `inkos init [name]`                         | 初始化项目（省略 name 在当前目录初始化）                                                                    |
-| `inkos book create`                         | 创建新书（`--genre`、`--platform`、`--chapter-words`、`--target-chapters`、`--brief <file>` 传入创作简报） |
+| `inkos book create`                         | 创建新书（`--genre`、`--platform`、`--chapter-words`、`--target-chapters`、`--brief <file>` 传入创作简报、`--author-intent <file>` / `--current-focus <file>` 写入长期意图与开篇焦点） |
 | `inkos book update [id]`                    | 修改书设置（`--chapter-words`、`--target-chapters`、`--status`）                                    |
 | `inkos book list`                           | 列出所有书籍                                                                                     |
 | `inkos book delete <id>`                    | 删除书籍及全部数据（`--force` 跳过确认）                                                                  |
-| `inkos genre list/show/copy/create`         | 查看、复制、创建题材                                                                                 |
 | `inkos write next [id]`                     | 完整管线写下一章（`--words` 覆盖字数，`--count` 连写，`-q` 静默模式）                                            |
 | `inkos write rewrite [id] <n>`              | 重写第 N 章（恢复状态快照，`--force` 跳过确认，`--words` 覆盖字数）                                              |
 | `inkos revise [id] [n]`                     | 修订指定章节                                                                                     |
@@ -584,8 +585,7 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | `inkos config show-models`                  | 查看当前模型路由                                                                                   |
 | `inkos doctor`                              | 诊断配置问题（显示 effective config mode、来源、API 连通性和提供商兼容性提示）                                       |
 | `inkos detect [id] [n]`                     | AIGC 检测（`--all` 全部章节，`--stats` 统计）                                                         |
-| `inkos style analyze <file>`                | 分析参考文本提取文风指纹                                                                               |
-| `inkos style import <file> [id]`            | 导入文风指纹到指定书                                                                                 |
+| `inkos style import <file> [id]`            | 把参考文本编译为文风指南并写入指定书的 `story/style_guide.md`                                            |
 | `inkos import canon [id] --from <parent>`   | 导入正传正典到番外书                                                                                 |
 | `inkos import chapters [id] --from <path>`  | 导入已有章节续写（`--split`、`--resume-from`）                                                        |
 | `inkos analytics [id]` / `inkos stats [id]` | 书籍数据分析（observation、章节长度、token 用量）                                                           |
@@ -595,7 +595,7 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | `inkos up / down`                           | 启动/停止守护进程（`-q` 静默模式，自动写入 `inkos.log`）                                                      |
 
 
-`[id]` 参数在项目只有一本书时可省略。`write next` 支持 `--context` 传入创作指导，`--words` 覆盖每章目标字数；`book create` 支持 `--brief <file>` 传入创作简报。内部 Planner/Composer 产生的 intent、context 和 trace 可在 Studio 中查看。
+`[id]` 参数在项目只有一本书时可省略。`write next` 支持 `--context` 传入创作指导，`--words` 覆盖每章目标字数；`book create` 支持 `--brief <file>` 传入创作简报，并可用 `--author-intent <file>`、`--current-focus <file>` 同时写入长期意图和开篇焦点。内部 Planner/Composer 产生的 intent、context 和 trace 可在 Studio 中查看。
 
 CLI 运行时还支持一次性 LLM 覆盖参数：`--service`、`--model`、`--api-key-env`、`--base-url`、`--api-format <chat|responses|anthropic>`、`--stream`、`--no-stream`。`anthropic` 对应 Anthropic Messages 协议。例如：
 

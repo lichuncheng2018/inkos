@@ -1190,6 +1190,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createBookFoundationTool(args.pipeline, {
       language: lang,
       actionPayload,
+      projectRoot: args.root,
       workerSkills: (worker) => worker === "architect" ? profileSkills("longform-novel") : [],
     });
     params = {

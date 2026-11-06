@@ -224,6 +224,9 @@ const ProposeActionParams = Type.Object({
     })),
     minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum chapter length."})),
     maxChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit maximum chapter length."})),
+    briefPath: Type.Optional(Type.String({ minLength: 1,
+      description: "stored_path of an uploaded .md/.txt brief that the user wants used as written. The host passes the file verbatim to the foundation and appends instruction as additional chat requests, so instruction should hold only decisions the file does not contain.",
+    })),
   }, { description: "Structured execution args for action=create_book. Put platform/length here; do not leave them only in instruction text." })),
   shortRun: Type.Optional(Type.Object({
     minChapterLength:Type.Optional(Type.Integer({minimum:1})),

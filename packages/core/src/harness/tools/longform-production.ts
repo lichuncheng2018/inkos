@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { PipelineRunner } from "../../pipeline/runner.js";
@@ -20,8 +22,17 @@ interface LongformToolOptions {
   readonly workerSkills?: (worker: string) => ReadonlyArray<ActivatedSkillGuidance>;
 }
 
+interface BookFoundationToolOptions extends LongformToolOptions {
+  /** Resolves uploaded briefs when there is no active Work. */
+  readonly projectRoot?: string;
+  /** Initial control documents; without them author intent starts as the brief. */
+  readonly authorIntent?: string;
+  readonly currentFocus?: string;
+}
+
 const BookCreateParams = Type.Object({
   instruction: Type.String(),
+  briefPath: Type.Optional(Type.String({ minLength: 1, description: "stored_path of an uploaded .md/.txt brief to pass verbatim; instruction is appended as additional requests." })),
   title: Type.Optional(Type.String()),
   bookId: Type.Optional(Type.String()),
   genre: Type.Optional(Type.String()),
@@ -125,9 +136,29 @@ function progress(onUpdate: AgentToolUpdateCallback | undefined, message: string
   onUpdate?.(textResult(message, undefined));
 }
 
+/** Only chat uploads qualify: other project files include .inkos/secrets.json. */
+async function readUploadedBrief(projectRoot: string | undefined, briefPath: string): Promise<string> {
+  if (!projectRoot) throw new Error("create_book.briefPath requires a project root.");
+  const path = resolve(projectRoot, briefPath);
+  const withinUploads = relative(resolve(projectRoot, ".inkos", "uploads"), path);
+  if (isAbsolute(briefPath) || !withinUploads || withinUploads.startsWith("..") || isAbsolute(withinUploads)
+    || !/\.(md|markdown|txt)$/i.test(path)) {
+    throw Object.assign(new Error("create_book.briefPath must name an uploaded .md or .txt file under .inkos/uploads/."), { code: "BRIEF_PATH_INVALID" });
+  }
+  const brief = (await readFile(path, "utf8")).trim();
+  if (!brief) throw Object.assign(new Error(`The uploaded brief ${briefPath} is empty.`), { code: "BRIEF_EMPTY" });
+  return brief;
+}
+
+function briefWithChatRequests(brief: string, instruction: string, language: "zh" | "en"): string {
+  const requests = instruction.trim();
+  if (!requests || requests === brief) return brief;
+  return `${brief}\n\n## ${language === "en" ? "Additional requests from the creation chat" : "建书对话补充"}\n${requests}`;
+}
+
 export function createBookFoundationTool(
   pipeline: PipelineRunner,
-  options: LongformToolOptions = {},
+  options: BookFoundationToolOptions = {},
 ): AgentTool<typeof BookCreateParams> {
   return {
     name: "create_book",
@@ -170,8 +201,16 @@ export function createBookFoundationTool(
           createdAt: existing?.createdAt ?? options.activeWork?.work.createdAt ?? now,
           updatedAt: now,
         } as const;
+        const briefPath = payload?.briefPath ?? params.briefPath;
+        const externalContext = briefPath
+          ? briefWithChatRequests(await readUploadedBrief(options.activeWork?.projectRoot ?? options.projectRoot, briefPath), params.instruction, language)
+          : params.instruction;
         await runPipeline(pipeline, signal, options, () => (
-          pipeline.initBook(book, { externalContext: params.instruction })
+          pipeline.initBook(book, {
+            externalContext,
+            authorIntent: options.authorIntent?.trim() || undefined,
+            currentFocus: options.currentFocus?.trim() || undefined,
+          })
         ));
         return textResult(`Created long-form Work "${title}" (${id}).`, {
           kind: "book_created",

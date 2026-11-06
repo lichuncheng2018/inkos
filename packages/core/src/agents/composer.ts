@@ -338,12 +338,14 @@ export class ComposerAgent extends BaseAgent {
     readonly language: "zh" | "en";
     readonly contextBudget?: ContextBudget;
   }): Promise<ContextPackage> {
+    // Selectors and the memo entry read goal and body together; repeating the
+    // goal in body would send it twice to every selection call.
     const plan: PlanChapterOutput = {
       intent: { chapter: input.chapterNumber, goal: input.goal },
       memo: {
         chapter: input.chapterNumber,
         goal: input.goal,
-        body: input.goal,
+        body: "",
         threadRefs: [],
       },
       intentMarkdown: input.goal,

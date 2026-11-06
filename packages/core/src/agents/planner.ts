@@ -52,12 +52,15 @@ export class PlannerAgent extends BaseAgent {
       bookDir: input.bookDir,
       chapterNumber: input.chapterNumber,
     });
-    const taskGoal = [
+    // Books created from a brief start with author_intent.md holding the same text.
+    const brief = seedMaterials.brief.trim();
+    const distinctBrief = brief && brief !== seedMaterials.authorIntent.trim() ? brief : "";
+    const taskGoal = [...new Set([
       input.externalContext,
       seedMaterials.currentFocus,
       seedMaterials.authorIntent,
-      seedMaterials.brief,
-    ].map((value) => value?.trim()).filter(Boolean).join("\n\n")
+      distinctBrief,
+    ].map((value) => value?.trim()).filter(Boolean))].join("\n\n")
       || (input.book.language === "en"
         ? `Continue chapter ${input.chapterNumber} from the current Work state.`
         : `根据当前作品状态续写第${input.chapterNumber}章。`);
@@ -67,20 +70,33 @@ export class PlannerAgent extends BaseAgent {
       goal: taskGoal,
       language: input.book.language,
     });
-    const contextPackage: ContextPackage = seedMaterials.previousEndingExcerpt
-      ? {
-          ...selected,
-          selectedContext: [
-            ...selected.selectedContext,
-            {
+    // taskGoal only steers source selection; the instruction, focus and intent
+    // already reach the memo request as their own inputs.
+    const governed = selected.selectedContext.filter((entry) => entry.source !== "runtime/chapter_memo");
+    const directionEnd = governed.findIndex((entry) => entry.source === "story/author_intent.md") + 1;
+    const contextPackage: ContextPackage = {
+      ...selected,
+      selectedContext: [
+        ...governed.slice(0, directionEnd),
+        ...(distinctBrief
+          ? [{
+              source: "story/brief.md",
+              reason: "Original creation brief. Where it differs from author intent or current focus, those documents take precedence.",
+              excerpt: distinctBrief,
+              protection: "protected" as const,
+            }]
+          : []),
+        ...governed.slice(directionEnd),
+        ...(seedMaterials.previousEndingExcerpt
+          ? [{
               source: `runtime/previous_chapter#${input.chapterNumber - 1}`,
               reason: "Previous chapter text required for chapter transition planning.",
               excerpt: seedMaterials.previousEndingExcerpt,
-              protection: "protected",
-            },
-          ],
-        }
-      : selected;
+              protection: "protected" as const,
+            }]
+          : []),
+      ],
+    };
     const plannerInputs = contextPackage.selectedContext.map((entry) => entry.source);
 
     const lengthSpec = buildLengthSpec(

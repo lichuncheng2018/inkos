@@ -38,7 +38,9 @@ bookCommand
   .option("--target-chapters <n>", "Target chapter count", "200")
   .option("--chapter-words <n>", "Words per chapter", "3000")
   .option("--brief <path>", "Path to creative brief file (.md/.txt) — Architect builds from your ideas instead of generating from scratch")
-  .option("--lang <language>", "Writing language: zh (Chinese) or en (English). Defaults from genre.")
+  .option("--author-intent <path>", "Long-term author intent file for story/author_intent.md (defaults to a copy of the brief)")
+  .option("--current-focus <path>", "Initial current focus file for story/current_focus.md (the first 1-3 chapters)")
+  .option("--lang <language>", "Writing language: zh (Chinese) or en (English). Defaults to the project language.")
   .option("--json", "Output JSON")
   .action(async (opts) => {
     try {
@@ -80,6 +82,12 @@ bookCommand
       const brief = opts.brief
         ? await readFile(resolve(opts.brief), "utf-8")
         : undefined;
+      const authorIntent = opts.authorIntent
+        ? await readFile(resolve(opts.authorIntent), "utf-8")
+        : undefined;
+      const currentFocus = opts.currentFocus
+        ? await readFile(resolve(opts.currentFocus), "utf-8")
+        : undefined;
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { externalContext: brief }));
       const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
@@ -89,6 +97,8 @@ bookCommand
         binding: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createBookFoundationTool(pipeline, {
           language: book.language,
+          authorIntent,
+          currentFocus,
           actionPayload: {
             createBook: {
               title: book.title,
