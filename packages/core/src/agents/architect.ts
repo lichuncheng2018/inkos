@@ -1,7 +1,8 @@
 import { BaseAgent } from "./base.js";
 import type { BookConfig, FanficMode } from "../models/book.js";
 import { join } from "node:path";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { parseTextureBank } from "../utils/texture-bank.js";
 import { renderHooksProjection } from "../state/state-projections.js";
 import { BookRulesSchema, type BookRules } from "../models/book-rules.js";
 import { FoundationDetailsToolSchema, FoundationOutlineToolSchema, FoundationCastIndexToolSchema, foundationCastDocumentsToolSchema } from "./architect-tool.js";
@@ -11,6 +12,9 @@ import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-
 
 // Architect owns the five-section persistence protocol. Foundation craft is
 // supplied by the active long-writing and derivative-work Skills.
+
+/** Fewer than this and the per-chapter rotation repeats within a few chapters. */
+const MIN_TEXTURE_ENTRIES = 12;
 
 export interface ArchitectRole {
   readonly tier: "major" | "minor";
@@ -76,6 +80,66 @@ export class ArchitectAgent extends BaseAgent {
       temperature: 0.8,
       onOutline: options?.onOutline,
     });
+  }
+
+  /**
+   * The book's texture bank (see utils/texture-bank.ts), written from the
+   * foundation and whatever the chapters have settled since. What belongs in
+   * it comes from the foundation method of the active Skill; this code owns
+   * the document shape the sampler reads.
+   */
+  async generateTextureBank(input: { readonly book: BookConfig; readonly bookDir: string }): Promise<string> {
+    const english = input.book.language === "en";
+    const read = async (path: string, maxChars: number, fromEnd = false): Promise<string> => {
+      try {
+        const text = (await readFile(join(input.bookDir, path), "utf-8")).trim();
+        return text.length <= maxChars ? text : fromEnd ? text.slice(-maxChars) : text.slice(0, maxChars);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+        throw error;
+      }
+    };
+    const roles: string[] = [];
+    for (const tier of ["主要角色", "次要角色"]) {
+      let files: string[] = [];
+      try { files = (await readdir(join(input.bookDir, "story", "roles", tier))).filter((file) => file.endsWith(".md")).sort(); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      for (const file of files) roles.push(`### ${file.replace(/\.md$/u, "")}\n${await read(join("story", "roles", tier, file), 400)}`);
+    }
+    const sources = [
+      ["story_frame", await read(join("story", "outline", "story_frame.md"), 12_000)],
+      ["book_rules", await read(join("story", "book_rules.md"), 8_000)],
+      ["author_intent", await read(join("story", "author_intent.md"), 3_000)],
+      ["roles", roles.slice(0, 16).join("\n\n")],
+      // What the chapters have already fixed outranks a fresh invention.
+      ["chapter_summaries", await read(join("story", "chapter_summaries.md"), 6_000, true)],
+    ].filter(([, text]) => text);
+    if (!sources.some(([name]) => name === "story_frame" || name === "book_rules")) {
+      throw Object.assign(new Error("A texture bank needs the book's foundation to draw on."), { code: "TEXTURE_BANK_UNGROUNDED" });
+    }
+    const system = english
+      ? `Write this book's texture bank, following the foundation method of the activated Skill. The material below is this book's foundation and what its chapters have established so far; nothing in the bank may contradict it.
+
+Shape: Markdown. One second-level heading per kind, and under it one entry per line beginning with "- ". Six to eight entries per kind. Kinds: Prices and going rates; Food; Objects and clothing; Forms of address and small rules; Sayings; How each named minor character gets by (one entry a person); The protagonist's earlier life (only when the story gives one). Leave out a kind this book has no use for.
+
+Reply with the document itself, without commentary.`
+      : `按已激活 Skill 的基础设定方法，为这本书写一份质感库。下面的材料是本书的设定和已经写出的前情，质感库不得与之矛盾。
+
+格式：Markdown。每一类一个二级标题，下面每条单独一行，以「- 」开头，每类六到八条。分类：物价与行情；吃食；器物与穿用；称呼与规矩；俗话与口头禅；各人的营生（具名配角平日靠什么过活、好打交道还是难缠，一人一条）；主角的旧经历（故事给了前史才写）。这本书用不上的类别不写。
+
+直接给出这份文档，不加说明。`;
+    const response = await this.chat([
+      { role: "system", content: system },
+      { role: "user", content: sources.map(([name, text]) => `<${name}>\n${text}\n</${name}>`).join("\n\n") },
+    ], { temperature: 0.8, maxTokens: Math.min(4096, this.ctx.client.defaults.maxTokens) });
+    const body = response.content.replace(/\r\n?/g, "\n").trim().replace(/^```[^\n]*\n([\s\S]*?)\n?```$/u, "$1").trim();
+    if (parseTextureBank(body).length < MIN_TEXTURE_ENTRIES) {
+      throw Object.assign(new Error("The texture bank came back without enough entries to rotate."), { code: "TEXTURE_BANK_INVALID" });
+    }
+    const header = english
+      ? "# Texture bank\n\nThis book's own small particulars. A few entries are offered to each chapter's plan in rotation, as optional material. Edit, add or delete freely: one entry per list line."
+      : "# 质感库\n\n这本书里现成的小东西。每章规划时轮流取几条作为可选素材。可以随意增删修改：一条一行。";
+    return `${header}\n\n${body.replace(/^#\s+[^\n]*\n+/u, "")}\n`;
   }
 
   private buildRevisePrompt(reviseFrom: {

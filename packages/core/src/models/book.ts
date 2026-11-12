@@ -3,6 +3,9 @@ import { z } from "zod";
 export const PlatformSchema = z.string().trim().min(1);
 export type Platform = z.infer<typeof PlatformSchema>;
 
+/** Every book is written for this platform; a different value in an older book.json is replaced when it is read. */
+export const BOOK_PLATFORM: Platform = "番茄小说";
+
 export const GenreSchema = z.string().min(1);
 export type Genre = z.infer<typeof GenreSchema>;
 
@@ -22,7 +25,7 @@ export type FanficMode = z.infer<typeof FanficModeSchema>;
 export const BookConfigSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
-  platform: PlatformSchema,
+  platform: z.unknown().transform((): Platform => BOOK_PLATFORM),
   genre: GenreSchema,
   status: BookStatusSchema,
   targetChapters: z.number().int().min(1),

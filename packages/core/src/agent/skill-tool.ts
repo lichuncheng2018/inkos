@@ -3,6 +3,7 @@ import { join, relative, sep } from "node:path";
 import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentMessage, AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AgentSkill, SkillRegistry } from "../skills/index.js";
+import { hasSkillAudiences, skillBodyForAudience } from "../skills/audience.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import {
   LocalSearchIndex,
@@ -221,12 +222,26 @@ export async function retrieveSkillResources(
 export async function hydrateActivatedSkillGuidance(
   activations: ReadonlyArray<ActivatedSkillGuidance> | undefined,
   query: string,
+  audience?: string,
 ): Promise<ReadonlyArray<ActivatedSkillGuidance> | undefined> {
   if (!activations || activations.length === 0) return activations;
-  return Promise.all(activations.map(async (activation) => {
+  return Promise.all(activations.map(async (source) => {
+    const scopes = hasSkillAudiences(source.skill.body);
+    const activation: ActivatedSkillGuidance = scopes
+      ? { ...source, skill: { ...source.skill, body: skillBodyForAudience(source.skill.body, audience) } }
+      : source;
     if (!activation.skill.baseDir) return activation;
     const linked = await loadLinkedSkillResources(activation.skill);
     const linkedPaths = new Set(linked.map(resource => resource.path));
+    if (scopes && audience !== undefined) {
+      // The Skill names what this worker reads, references included. Task-text
+      // retrieval would pull other workers' sections back in.
+      const elsewhere = new Set(linkedSkillResourcePaths(source.skill.body).filter(path => !linkedPaths.has(path)));
+      return {
+        skill: activation.skill,
+        resources: [...activation.resources.filter(resource => !linkedPaths.has(resource.path) && !elsewhere.has(resource.path)), ...linked],
+      };
+    }
     const resources = (await retrieveSkillResources(
       activation.skill.id,
       activation.skill.baseDir,
@@ -248,7 +263,7 @@ export async function hydrateActivatedSkillGuidance(
 /** Literal local document links in SKILL.md are part of its instructions, independent of query language. */
 export async function loadLinkedSkillResources(skill: AgentSkill): Promise<ActivatedSkillResource[]> {
   if (!skill.baseDir) return [];
-  const paths = [...new Set([...skill.body.matchAll(/(?:`|\]\()((?:references|examples)\/[^`\n)]+\.(?:md|txt))(?:`|\))/g)].map(match => match[1]!))];
+  const paths = linkedSkillResourcePaths(skill.body);
   return Promise.all(paths.map(async path => {
     const fullPath = safeChildPath(skill.baseDir!, path);
     const info = await lstatWithoutSymlinks(skill.baseDir!, fullPath);
@@ -258,6 +273,10 @@ export async function loadLinkedSkillResources(skill: AgentSkill): Promise<Activ
     if (body.includes("\0")) throw Object.assign(new Error("Skill reference must be text"), { code: "SKILL_REFERENCE_INVALID" });
     return { path, body, charStart: 0, charEnd: body.length };
   }));
+}
+
+function linkedSkillResourcePaths(body: string): string[] {
+  return [...new Set([...body.matchAll(/(?:`|\]\()((?:references|examples)\/[^`\n)]+\.(?:md|txt))(?:`|\))/g)].map(match => match[1]!))];
 }
 
 async function listSkillTextFiles(root: string, current = root): Promise<string[]> {

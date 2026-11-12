@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentModelOverride } from "../llm/model-override.js";
+import { DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE, resolveAgentModelOverride } from "../llm/model-override.js";
+import { createLLMClient } from "../llm/provider.js";
+import { PipelineRunner } from "../pipeline/runner.js";
 import type { LLMConfig } from "../models/project.js";
 
 const llm: LLMConfig = {
@@ -35,6 +37,22 @@ const llm: LLMConfig = {
 };
 
 describe("resolveAgentModelOverride", () => {
+  it("routes reader simulation to DeepSeek by default and honors an explicit project override", () => {
+    expect(DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE).toEqual({ service: "deepseek", model: "deepseek-flash" });
+    const defaultClient = createLLMClient(llm);
+    const defaultRunner = new PipelineRunner({ client: defaultClient, model: llm.model, projectRoot: "/tmp" });
+    expect(defaultRunner.createAgentContext("reader-simulator").model).toBe("deepseek-flash");
+
+    const overriddenRunner = new PipelineRunner({
+      client: defaultClient,
+      model: llm.model,
+      projectRoot: "/tmp",
+      defaultLLMConfig: llm,
+      modelOverrides: { "reader-simulator": "reader-project-model" },
+    });
+    expect(overriddenRunner.createAgentContext("reader-simulator").model).toBe("reader-project-model");
+  });
+
   it("reuses the default client when the model stays on the same endpoint", () => {
     const resolved = resolveAgentModelOverride({
       override: "deepseek-v4.1-flash-1017",

@@ -1,6 +1,7 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { BaseAgent } from "./base.js";
+import { TEXTURE_BANK_PATH, parseTextureBank, renderTextureSample, sampleTextureBank } from "../utils/texture-bank.js";
 import type { BookConfig } from "../models/book.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
@@ -12,6 +13,7 @@ import {
   type ContextPackage,
 } from "../models/input-governance.js";
 import { loadPlanningSeedMaterials } from "../utils/planning-materials.js";
+import { assessMemoDensity, memoDensityFeedback } from "../utils/memo-density.js";
 import { ChapterMemoToolSchema } from "./planner-tool.js";
 import {
   buildPlannerUserMessage,
@@ -32,6 +34,16 @@ export interface PlanChapterOutput {
   readonly intentMarkdown: string;
   readonly plannerInputs: ReadonlyArray<string>;
   readonly runtimePath: string;
+}
+
+/** A book without a texture bank plans from the governed context alone. */
+async function readTextureBank(bookDir: string): Promise<string> {
+  try {
+    return await readFile(join(bookDir, TEXTURE_BANK_PATH), "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
 }
 
 /**
@@ -97,7 +109,14 @@ export class PlannerAgent extends BaseAgent {
           : []),
       ],
     };
-    const plannerInputs = contextPackage.selectedContext.map((entry) => entry.source);
+    const textureSample = renderTextureSample(
+      sampleTextureBank(parseTextureBank(await readTextureBank(input.bookDir)), input.chapterNumber),
+      input.book.language,
+    );
+    const plannerInputs = [
+      ...contextPackage.selectedContext.map((entry) => entry.source),
+      ...(textureSample ? [TEXTURE_BANK_PATH] : []),
+    ];
 
     const lengthSpec = buildLengthSpec(
       input.book.chapterWordCount,
@@ -107,6 +126,7 @@ export class PlannerAgent extends BaseAgent {
       chapterNumber: input.chapterNumber,
       contextPackage,
       currentInstruction: input.externalContext,
+      textureSample,
       language: input.book.language,
       lengthSpec,
     });
@@ -137,6 +157,7 @@ export class PlannerAgent extends BaseAgent {
     readonly chapterNumber: number;
     readonly contextPackage: ContextPackage;
     readonly currentInstruction?: string;
+    readonly textureSample?: string;
     readonly language?: "zh" | "en";
     readonly lengthSpec: LengthSpec;
   }): Promise<ChapterMemo> {
@@ -146,6 +167,7 @@ export class PlannerAgent extends BaseAgent {
       chapterNumber: input.chapterNumber,
       contextPackage: input.contextPackage,
       currentInstruction: input.currentInstruction,
+      textureSample: input.textureSample,
       lengthBudget: {
         target: input.lengthSpec.target,
         unit: input.lengthSpec.countingMode === "en_words" ? "words" : "字",
@@ -155,6 +177,8 @@ export class PlannerAgent extends BaseAgent {
 
     const systemPrompt = getPlannerMemoSystemPrompt(language);
 
+    // One correction only: a memo that is still dense on resubmission is used as is.
+    let densityChecked = false;
     const { result } = await this.submitStructured(
       [
         { role: "system", content: systemPrompt },
@@ -165,6 +189,13 @@ export class PlannerAgent extends BaseAgent {
         label: "Submit chapter memo",
         description: "Submit the complete semantic chapter plan for host persistence.",
         parameters: ChapterMemoToolSchema,
+        validate: (submitted) => {
+          if (densityChecked) return submitted;
+          densityChecked = true;
+          const report = assessMemoDensity(submitted.body, language);
+          if (report.dense) throw Object.assign(new Error(memoDensityFeedback(report, language)), { code: "MEMO_TOO_DENSE" });
+          return submitted;
+        },
       },
       { temperature: 0.7, maxTokens: this.ctx.client.defaults.maxTokens },
     );

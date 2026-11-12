@@ -14,7 +14,7 @@ import { currentExecutionAuthorRequest } from "../harness/execution-evidence.js"
 import { createPlayPresentation } from "../play/play-presentation.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import {
-  type Platform,
+  BOOK_PLATFORM,
   type BookConfig,
   type FanficMode,
 } from "../models/book.js";
@@ -91,7 +91,6 @@ function resolveToolBookId(
 function buildAgentBookConfig(input: {
   readonly title: string;
   readonly genre?: string;
-  readonly platform?: Platform;
   readonly language?: "zh" | "en";
   readonly targetChapters?: number;
   readonly chapterWordCount?: number;
@@ -106,7 +105,7 @@ function buildAgentBookConfig(input: {
   return {
     id,
     title: input.title.trim(),
-    platform: input.platform ?? "other",
+    platform: BOOK_PLATFORM,
     genre: input.genre?.trim() || "other",
     status: "outlining",
     targetChapters: input.targetChapters ?? defaults.targetChapters ?? 200,
@@ -208,11 +207,9 @@ const ProposeActionParams = Type.Object({
     title: Type.String({
       description: "Confirmed long-form book title.",
     }),
-    genre: Type.Optional(Type.String({
-      description: "Confirmed book genre/category.",
-    })),
-    platform: Type.Optional(Type.String({ minLength: 1, description: "Confirmed target platform, preserved exactly as Work metadata." })),
-    language: Type.Optional(Type.Union([
+    genre: Type.String({ minLength: 1,
+      description: "Confirmed book genre in the author's own words: a few words taken from the request or the brief, such as 玄幻修仙, 都市重生 or mystery. It selects the genre-specific writing guidance, and it is not read out of an uploaded brief, so state it here even when the brief names it.",
+    }),    language: Type.Optional(Type.Union([
       Type.Literal("zh"),
       Type.Literal("en"),
     ], { description: "Confirmed writing language." })),
@@ -227,7 +224,7 @@ const ProposeActionParams = Type.Object({
     briefPath: Type.Optional(Type.String({ minLength: 1,
       description: "stored_path of an uploaded .md/.txt brief that the user wants used as written. The host passes the file verbatim to the foundation and appends instruction as additional chat requests, so instruction should hold only decisions the file does not contain.",
     })),
-  }, { description: "Structured execution args for action=create_book. Put platform/length here; do not leave them only in instruction text." })),
+  }, { description: "Structured execution args for action=create_book. Put genre and length here; do not leave them only in instruction text or in an uploaded brief. Every book is written for 番茄小说, so there is no platform to confirm." })),
   shortRun: Type.Optional(Type.Object({
     minChapterLength:Type.Optional(Type.Integer({minimum:1})),
     openingHookChars:Type.Optional(Type.Integer({minimum:1})),
@@ -341,9 +338,7 @@ const ProposeActionParams = Type.Object({
     sourcePath: Type.Optional(Type.String({ description: "Project-relative uploaded canon/source file path." })),
     sourceName: Type.Optional(Type.String({ description: "Human-readable source work name." })),
     mode: Type.Optional(Type.String({ description: "Confirmed fanfiction boundary in the user's own terms." })),
-    genre: Type.Optional(Type.String({ description: "Confirmed genre." })),
-    platform: Type.Optional(Type.String({ minLength: 1 })),
-    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+    genre: Type.Optional(Type.String({ description: "Confirmed genre." })),    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length." })),
     minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum chapter length."})),
@@ -356,9 +351,7 @@ const ProposeActionParams = Type.Object({
     sourcePath: Type.String({ description: "Project-relative uploaded novel file or chapter directory." }),
     splitPattern: Type.Optional(Type.String({ description: "Optional custom chapter-heading regex source." })),
     resumeFrom: Type.Optional(Type.Number({ description: "Existing Work only: resume an interrupted import from this 1-based source chapter. Omit when creating a new continuation Work." })),
-    genre: Type.Optional(Type.String({ description: "Genre for a newly created continuation book." })),
-    platform: Type.Optional(Type.String({ minLength: 1 })),
-    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+    genre: Type.Optional(Type.String({ description: "Genre for a newly created continuation book." })),    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Target total chapters for a new book." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Per-chapter length for a new book." })),
     minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum chapter length."})),
@@ -369,9 +362,7 @@ const ProposeActionParams = Type.Object({
     title: Type.String({ description: "Confirmed side-story title." }),
     parentBookId: Type.String({ description: "Existing InkOS parent book id whose canon is inherited." }),
     direction: Type.Optional(Type.String({ description: "Confirmed standalone side-story direction." })),
-    genre: Type.Optional(Type.String({ description: "Optional genre override; defaults to the parent book." })),
-    platform: Type.Optional(Type.String({ minLength: 1 })),
-    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+    genre: Type.Optional(Type.String({ description: "Optional genre override; defaults to the parent book." })),    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Optional chapter count; defaults to the parent book." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Optional chapter length; defaults to the parent book." })),
     minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum chapter length."})),
@@ -384,9 +375,7 @@ const ProposeActionParams = Type.Object({
     referencePath: Type.Optional(Type.String({ description: "Project-relative uploaded reference-work path." })),
     storyIdea: Type.String({ description: "Confirmed original story idea; do not copy the reference plot." }),
     sourceName: Type.Optional(Type.String({ description: "Human-readable reference work name." })),
-    genre: Type.Optional(Type.String({ description: "Confirmed genre." })),
-    platform: Type.Optional(Type.String({ minLength: 1 })),
-    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+    genre: Type.Optional(Type.String({ description: "Confirmed genre." })),    language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
     targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count." })),
     chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length." })),
     minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum chapter length."})),
@@ -556,6 +545,7 @@ function requireProposedText(value: string | undefined, label: string): void {
 function assertExecutableProposedAction(params: ProposeActionParamsType, payload: ActionPayload | undefined): void {
   if (params.action === "create_book") {
     requireProposedText(payload?.createBook?.title, "createBook.title");
+    requireProposedText(payload?.createBook?.genre, "createBook.genre");
     return;
   }
   if (params.action === "play_start") {
@@ -1300,9 +1290,7 @@ const FanficCreateParams = Type.Object({
   sourcePath: Type.Optional(Type.String({ description: "Project-relative uploaded canon/source path." })),
   sourceName: Type.Optional(Type.String({ description: "Human-readable source work name." })),
   mode: Type.Optional(Type.String({ description: "Fanfiction boundary in the user's own terms." })),
-  genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.String({ minLength: 1 })),
-  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+  genre: Type.Optional(Type.String()),  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
   minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum per chapter from the author."})),
@@ -1368,9 +1356,7 @@ const SpinoffCreateParams = Type.Object({
   parentBookId: Type.String({ description: "Existing InkOS parent book id." }),
   source: Type.Optional(CreationSourceReference),
   direction: Type.Optional(Type.String({ description: "Side-story direction that must not advance the parent mainline." })),
-  genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.String({ minLength: 1 })),
-  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+  genre: Type.Optional(Type.String()),  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
   minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum per chapter from the author."})),
@@ -1397,7 +1383,6 @@ export function createSpinoffBookTool(
         ...params,
         parentBookId,
         genre: params.genre ?? parent.genre,
-        platform: params.platform ?? parent.platform,
         language: params.language ?? parent.language,
         targetChapters: params.targetChapters ?? parent.targetChapters,
         chapterWordCount: params.chapterWordCount ?? parent.chapterWordCount,
@@ -1439,9 +1424,7 @@ const ImitationCreateParams = Type.Object({
   referencePath: Type.Optional(Type.String({ description: "Project-relative uploaded reference-work path." })),
   storyIdea: Type.String({ description: "Original story idea. The reference contributes prose style, not plot or characters." }),
   sourceName: Type.Optional(Type.String({ description: "Human-readable reference work name." })),
-  genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.String({ minLength: 1 })),
-  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+  genre: Type.Optional(Type.String()),  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
   minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum per chapter from the author."})),
@@ -1507,9 +1490,7 @@ const ContinuationImportParams = Type.Object({
     minimum: 1,
     description: "Existing Work only: resume an interrupted import from this 1-based source chapter. Omit for a new continuation Work.",
   })),
-  genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.String({ minLength: 1 })),
-  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+  genre: Type.Optional(Type.String()),  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
   minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Explicit minimum per chapter from the author."})),
@@ -1743,6 +1724,7 @@ export function createShortFictionRunTool(
           runtimes: {
             planner: pipeline.createAgentContext("short-outline"),
             writer: pipeline.createAgentContext("short-writer"),
+            reader: pipeline.createAgentContext("reader-simulator"),
             draftReview: pipeline.createAgentContext("short-draft-review"),
             package: pipeline.createAgentContext("short-package"),
           },

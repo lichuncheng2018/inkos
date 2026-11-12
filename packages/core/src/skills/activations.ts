@@ -27,7 +27,7 @@ const WORK_CREATION_SKILLS: Readonly<Record<string, string>> = {
 const PROSE_PROFILE_IDS: ReadonlySet<string> = new Set(["longform-novel", "short-fiction"]);
 
 const CHINESE_GENRE_VOICE_SKILLS: ReadonlyArray<{ readonly genre: RegExp; readonly skillId: string }> = [
-  { genre: /玄幻|修仙|仙侠|修真|高武|xuanhuan|xianxia|cultivation/i, skillId: "inkos-sankai-style" },
+  { genre: /玄幻|修仙|仙侠|修真|高武|xuanhuan|xianxia|cultivation/i, skillId: "inkos-ziling-style" },
 ];
 
 function genreVoiceSkillIds(work: WorkManifest): string[] {

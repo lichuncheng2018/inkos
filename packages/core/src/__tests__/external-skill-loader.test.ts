@@ -33,6 +33,7 @@ const BUILTIN_SKILL_IDS = [
   "inkos-story-review",
   "inkos-storyboard",
   "inkos-translation",
+  "inkos-ziling-style",
 ] as const;
 
 describe("external skill loader", () => {

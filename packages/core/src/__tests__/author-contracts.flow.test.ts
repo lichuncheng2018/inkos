@@ -1,4 +1,4 @@
-import {it,expect} from 'vitest';
+import {it,expect,vi} from 'vitest';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {mkdtemp,mkdir,readFile,writeFile,rm,readdir} from 'node:fs/promises';
@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {createLLMClient} from '../llm/provider.js';
+import {ReaderSimulatorAgent} from '../agents/reader-simulator.js';
 import {createWorkManifest,saveWorkManifest,loadWorkManifest} from '../harness/work-store.js';
 import {syncWorkSourceArtifacts} from '../harness/source-sync.js';
 import {createBuiltInWorkProfileRegistry} from '../harness/builtin-profiles.js';
@@ -47,6 +48,7 @@ it('revises only an opening, then applies an author-requested chapter reduction 
     const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
     const runtime={client,model:'fixture',projectRoot:root};
     const options={projectRoot:root,storyId:'tea',direction:'Change only the independent opening.',revisionChapterNumbers:[] as number[],cover:false,runtimes:{planner:runtime,writer:runtime,draftReview:runtime,package:runtime}};
+    const readerSimulation=vi.spyOn(ReaderSimulatorAgent.prototype,'simulateChapter');
     const first=await reviseShortFictionProduction(options);
     const openingRevision=JSON.parse(await readFile(join(base,'final/short-story.json'),'utf8'));
     expect(openingRevision.chapters).toEqual(draft.chapters);
@@ -67,6 +69,7 @@ it('revises only an opening, then applies an author-requested chapter reduction 
     const previous=after.artifacts.find(a=>a.id===originalManuscript.id)!.revisions.find(r=>r.id===originalManuscript.currentRevisionId)!;
     expect(createHash('sha256').update(await readFile(join(root,'works/tea',previous.snapshotPath!))).digest('hex')).toBe(previous.checksum.slice(7));
     expect(calls.filter(name=>name==='submit_short_revision_chapter')).toHaveLength(0);
+    expect(readerSimulation).not.toHaveBeenCalled();
     expect(planNumber).toBe(3);
   }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
 },20000);

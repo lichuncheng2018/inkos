@@ -15,6 +15,33 @@ export const ShortStageSchema = z.object({
   observations: z.array(ObservationSchema),
   error: z.string().optional(),
 }).strict();
+export const ShortReaderSimulationChapterSchema = z.object({
+  sourceHash: z.string(),
+  finalHash: z.string(),
+  inputSummary: z.string(),
+  simulationStatus: z.enum(["completed", "failed"]),
+  revisionStatus: z.enum(["not-needed", "completed", "failed"]),
+  summary: z.string(),
+  observations: z.array(ObservationSchema),
+  tokenUsage: z.object({
+    promptTokens: z.number().int().nonnegative(),
+    completionTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict(),
+}).strict();
+export const ShortReaderSimulationStageSchema = z.object({
+  status: z.enum(["completed", "failed"]),
+  inputHash: z.string(),
+  updatedAt: z.string(),
+  error: z.string().optional(),
+  observations: z.array(ObservationSchema),
+  tokenUsage: z.object({
+    promptTokens: z.number().int().nonnegative(),
+    completionTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict(),
+  chapters: z.record(z.string(), ShortReaderSimulationChapterSchema),
+}).strict();
 export const ShortProductionStateSchema = z.object({
   version: z.literal(2),
   intent: z.string(),
@@ -42,10 +69,13 @@ export const ShortProductionStateSchema = z.object({
     review: ShortStageSchema.optional(),
     package: ShortStageSchema.optional(),
     cover: ShortStageSchema.optional(),
+    readerSimulation: ShortReaderSimulationStageSchema.optional(),
   }).strict(),
 }).strict();
 export type ShortProductionState = z.infer<typeof ShortProductionStateSchema>;
 export type ShortStage = z.infer<typeof ShortStageSchema>;
+export type ShortReaderSimulationChapter = z.infer<typeof ShortReaderSimulationChapterSchema>;
+export type ShortReaderSimulationStage = z.infer<typeof ShortReaderSimulationStageSchema>;
 export function shortInputHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex")}`;
 }

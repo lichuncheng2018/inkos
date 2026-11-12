@@ -5,7 +5,7 @@ import {changedSourceRegion} from '../utils/source-text.js';
 import {createBuiltInWorkProfileRegistry} from "../harness/builtin-profiles.js";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { createLLMClient } from "../llm/provider.js";
-import { resolveAgentModelOverride } from "../llm/model-override.js";
+import { DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE, resolveAgentModelOverride } from "../llm/model-override.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
@@ -15,6 +15,7 @@ import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
 import { ComposerAgent, type ComposeChapterOutput } from "../agents/composer.js";
 import { WriterAgent, type WriteChapterInput, type WriteChapterOutput } from "../agents/writer.js";
 import { ContinuityAuditor } from "../agents/continuity.js";
+import { ReaderSimulatorAgent } from "../agents/reader-simulator.js";
 import { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseMode } from "../agents/reviser.js";
 import { StateValidatorAgent, type ValidationResult } from "../agents/state-validator.js";
 import { RadarAgent } from "../agents/radar.js";
@@ -31,6 +32,8 @@ import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js
 import type { ChapterMemo, ChapterTrace, ContextPackage } from "../models/input-governance.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { buildLengthSpec, chapterLengthDelivery, countChapterLength, formatLengthCount, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
+import { proseLintObservations } from "../utils/prose-lint.js";
+import { TEXTURE_BANK_PATH } from "../utils/texture-bank.js";
 import {
   readCharacterContext,
   readStoryFrame,
@@ -54,6 +57,7 @@ import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harne
 import { WorkManifestSchema, type WorkManifest } from "../harness/contracts.js";
 import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
 import { reviewChapterDraft } from "./chapter-review.js";
+import { readerUnavailableObservation, simulateAndReviseChapter } from "./reader-revision.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
 import { selectBookReferenceContext } from "../references/reference-context.js";
@@ -148,6 +152,22 @@ export interface ChapterPipelineResult {
   readonly lengthTelemetry?: LengthTelemetry;
   readonly tokenUsage?: TokenUsageSummary;
   readonly contextTrace?: ChapterContextTraceSummary;
+}
+
+async function readPreviousChapterSummary(bookDir: string, chapterNumber: number, language: "zh" | "en"): Promise<string> {
+  if (chapterNumber < 1) return "";
+  try {
+    const snapshot = await loadRuntimeStateSnapshotAtChapter({ bookDir, chapterNumber, language });
+    const row = snapshot.chapterSummaries.rows.find((item) => item.chapter === chapterNumber);
+    if (!row) return "";
+    return [row.title, row.characters, row.events, row.stateChanges, row.hookActivity, row.mood]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    // The previous summary is optional reader context; it must not block a chapter.
+    return "";
+  }
 }
 
 export interface WriteChaptersOptions {
@@ -367,7 +387,8 @@ export class PipelineRunner {
 
 
   private resolveOverride(agentName: string): { model: string; client: LLMClient } {
-    const override = this.config.modelOverrides?.[agentName];
+    const override = this.config.modelOverrides?.[agentName]
+      ?? (agentName === "reader-simulator" ? DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE : undefined);
     if (!override) {
       return { model: this.config.model, client: this.config.client };
     }
@@ -974,6 +995,8 @@ export class PipelineRunner {
           // The returned delivery reports any remaining gap as needs_revision,
           // as for newly written chapters.
           keepNearestLength: true,
+          // Revised chapter prose leaves the model the way the first draft does.
+          proseChannel: "text",
         },
       );
 
@@ -1346,6 +1369,91 @@ export class PipelineRunner {
     let auditResult = reviewResult.review;
 
     this.throwIfOperationAborted();
+    this.logStage(stageLanguage, { zh: "章节去 AI 味", en: "cleaning up generic prose" });
+    try {
+      const available = await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot });
+      const skill = available.skills.find((candidate) => candidate.id === "inkos-story-deslop");
+      if (!skill) throw new Error("Required skill unavailable: inkos-story-deslop");
+      const context = this.agentCtxFor("reviser", bookId);
+      const deslop = await new ReviserAgent({
+        ...context,
+        activatedSkills: mergeActivatedSkillGuidance(context.activatedSkills ?? [], [{ skill, resources: [] }]),
+      }).reviseChapter(bookDir, finalContent, chapterNumber, [], "anti-detect", book.genre, {
+        language: pipelineLang,
+        chapterTitle: output.title,
+        contextPackage: {
+          ...reducedControlInput.contextPackage,
+          selectedContext: [...reducedControlInput.contextPackage.selectedContext, {
+            source: "pipeline:semantic-prose-cleanup",
+            reason: "Post-review semantic prose cleanup",
+            protection: "protected",
+            excerpt: this.localize(pipelineLang, {
+              zh: "按 inkos-story-deslop 执行一轮语义去 AI 味。只改正文表达，保留标题、事件、时序、事实、视角、人物声音、姓名、数值和后果；不借机修复审稿中的剧情问题，不新增场景。不要声称已通过外部检测或分数提高。",
+              en: "Perform one semantic prose cleanup using inkos-story-deslop. Change expression only; preserve the title, events, chronology, facts, viewpoint, character voice, names, numbers and consequences. Do not repair plot issues from review or add scenes. Do not claim external detection or a score improvement.",
+            }),
+          }],
+        },
+        lengthSpec,
+        proseChannel: "text",
+      });
+      totalUsage = PipelineRunner.addUsage(totalUsage, deslop.tokenUsage);
+      this.assertChapterContentNotEmpty(deslop.revisedContent, chapterNumber, "semantic prose cleanup");
+      finalContent = deslop.revisedContent;
+    } catch (error) {
+      this.throwIfOperationAborted();
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      const summary = this.localize(pipelineLang, {
+        zh: `去 AI 味流程不可用，保留原稿：${reason}`,
+        en: `Semantic prose cleanup unavailable; the original draft was kept: ${reason}`,
+      });
+      auditResult = { ...auditResult, observations: [...auditResult.observations, {
+        code: "deslop-unavailable", category: "execution", assessment: "unavailable", summary, evidence: [],
+      }] };
+      this.logWarn(stageLanguage, { zh: summary, en: summary });
+    }
+
+    this.throwIfOperationAborted();
+    this.logStage(stageLanguage, { zh: "模拟目标读者并按反馈定点修订", en: "simulating a target reader and applying focused feedback" });
+    try {
+      const previousChapterSummary = await readPreviousChapterSummary(bookDir, chapterNumber - 1, pipelineLang);
+      const readerPass = await simulateAndReviseChapter({
+        reader: new ReaderSimulatorAgent(this.agentCtxFor("reader-simulator", bookId)),
+        reviser: new ReviserAgent(this.agentCtxFor("reviser", bookId)),
+        simulation: {
+          storyTitle: book.title,
+          genre: book.genre,
+          platform: book.platform,
+          chapterNumber,
+          chapterTitle: output.title,
+          chapterContent: finalContent,
+          previousChapterSummary,
+          language: pipelineLang,
+        },
+        bookDir,
+        contextPackage: reducedControlInput.contextPackage,
+        lengthSpec,
+        signal: this.currentAbortSignal(),
+      });
+      finalContent = readerPass.content;
+      totalUsage = PipelineRunner.addUsage(totalUsage, readerPass.tokenUsage);
+      auditResult = {
+        ...auditResult,
+        observations: [...auditResult.observations, ...readerPass.observations],
+      };
+      if (readerPass.simulationStatus === "failed" || readerPass.revisionStatus === "failed") {
+        this.logWarn(stageLanguage, { zh: readerPass.summary, en: readerPass.summary });
+      }
+    } catch (error) {
+      this.throwIfOperationAborted();
+      auditResult = {
+        ...auditResult,
+        observations: [...auditResult.observations, readerUnavailableObservation("reader-simulation-unavailable", error, pipelineLang)],
+      };
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logWarn(stageLanguage, { zh: reason, en: reason });
+    }
+
     // 4. Save the final chapter and truth files from a single persistence source
     this.logStage(stageLanguage, { zh: "落盘最终章节", en: "persisting final chapter" });
     this.logStage(stageLanguage, { zh: "生成最终真相文件", en: "rebuilding final truth files" });
@@ -1361,12 +1469,15 @@ export class PipelineRunner {
       reducedControlInput,
     );
     finalWordCount = persistenceOutput.wordCount;
+    const postRevisionCount = finalContent === output.content
+      ? 0
+      : countChapterLength(finalContent, lengthSpec.countingMode);
     const lengthTelemetry = this.buildLengthTelemetry({
       lengthSpec,
       writerCount,
-      postReviseCount: 0,
+      postReviseCount: postRevisionCount,
       finalCount: finalWordCount,
-      repairApplied: false,
+      repairApplied: finalContent !== output.content,
     });
 
     // 4.1 Validate settler output before writing
@@ -1416,6 +1527,14 @@ export class PipelineRunner {
         ],
       };
     }
+    // Measured on the draft that is kept; reported, never applied.
+    auditResult = {
+      ...auditResult,
+      observations: [
+        ...auditResult.observations,
+        ...proseLintObservations(finalContent, pipelineLang, `chapter-${chapterNumber}`),
+      ],
+    };
 
     await persistChapterArtifacts({
       chapterNumber,
@@ -2068,7 +2187,10 @@ export class PipelineRunner {
     );
     return {
       ...llmAudit,
-      observations: llmAudit.observations,
+      observations: [
+        ...llmAudit.observations,
+        ...proseLintObservations(params.chapterContent, params.language, `chapter-${params.chapterNumber}`),
+      ],
       summary: llmAudit.summary,
       tokenUsage: llmAudit.tokenUsage,
     };
@@ -2165,6 +2287,7 @@ export class PipelineRunner {
       if (persisted) return persisted;
     }
 
+    await this.ensureTextureBank(book, bookDir);
     const planner = new PlannerAgent(this.agentCtxFor("planner", book.id));
     const plan = await planner.planChapter({
       book,
@@ -2176,6 +2299,28 @@ export class PipelineRunner {
     // skip the planner LLM call when no new context is supplied.
     await savePersistedPlan(bookDir, plan);
     return plan;
+  }
+
+  /**
+   * Write the book's texture bank the first time a chapter is planned without
+   * one. The bank only enriches planning, so a chapter is still planned when
+   * it cannot be written; the next chapter tries again.
+   */
+  private async ensureTextureBank(book: BookConfig, bookDir: string): Promise<void> {
+    const path = join(bookDir, TEXTURE_BANK_PATH);
+    if (await this.pathExists(path)) return;
+    const language = await this.resolveBookLanguage(book);
+    this.logStage(language, { zh: "生成本书质感库（仅首次）", en: "writing the book's texture bank (first time only)" });
+    try {
+      const bank = await new ArchitectAgent(this.agentCtxFor("architect", book.id)).generateTextureBank({ book, bookDir });
+      await writeFile(path, bank, "utf-8");
+    } catch (error) {
+      this.currentAbortSignal()?.throwIfAborted();
+      this.logWarn(language, {
+        zh: `质感库没有生成，本章照常规划：${error instanceof Error ? error.message : String(error)}`,
+        en: `The texture bank was not written; planning continues without it: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
 
   private async emitWebhook(

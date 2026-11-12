@@ -37,6 +37,9 @@ export function createHarnessContextTransform(input: {
     async load(request) {
       const work = request.work;
       if (!work) return [];
+      // The brief saved at creation is shown every turn. Unlabelled, it reads as
+      // a standing instruction and outvotes direction the author changed later.
+      const { intent: creationBrief, ...metadata } = work.metadata;
       return [{
         id: "work-identity",
         source: "current Work",
@@ -50,7 +53,11 @@ export function createHarnessContextTransform(input: {
           language: work.language,
           status: work.status,
           lineage: work.lineage,
-          metadata: work.metadata,
+          metadata,
+          ...(typeof creationBrief === "string" && creationBrief.trim() ? { creationBrief: {
+            text: creationBrief,
+            status: "The request this Work was created from, kept as history. The Work's current artifacts state its direction, voice and rules; where they differ from this brief, they are the authority.",
+          } } : creationBrief === undefined ? {} : { creationBrief }),
           artifacts: work.artifacts.map((artifact) => ({
             id: artifact.id,
             kind: artifact.kind,

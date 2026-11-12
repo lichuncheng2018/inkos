@@ -3,7 +3,6 @@ import {
   buildBookCreatePayload,
   defaultBookCreateForm,
   isBookCreateFormReady,
-  platformOptionsForLanguage,
   waitForBookReady,
 } from "./BookCreate";
 
@@ -12,8 +11,7 @@ describe("book creation miniflow", () => {
     const form = {
       ...defaultBookCreateForm("en"),
       title: " Night Harbor ",
-      genre: " maritime mystery ",
-      platform: "royal-road",
+      genre: { category: "Mystery", detail: " maritime " },
       targetChapters: "120",
       chapterWordCount: "2000",
       brief: " A harbor clerk follows a falsified cold-chain ledger. ",
@@ -21,14 +19,23 @@ describe("book creation miniflow", () => {
     expect(isBookCreateFormReady(form)).toBe(true);
     expect(buildBookCreatePayload(form, "en")).toEqual({
       title: "Night Harbor",
-      genre: "maritime mystery",
-      platform: "royal-road",
+      genre: "Mystery/maritime",
       language: "en",
       targetChapters: 120,
       chapterWordCount: 2000,
       blurb: "A harbor clerk follows a falsified cold-chain ledger.",
     });
-    expect(platformOptionsForLanguage("en").map((option) => option.value)).toContain("royal-road");
+  });
+
+  it("waits for a genre category before the form can be submitted", () => {
+    const form = {
+      ...defaultBookCreateForm("zh"),
+      title: "宗门",
+      genre: { category: "", detail: "宗门 加点" },
+      brief: "简介",
+    };
+    expect(isBookCreateFormReady(form)).toBe(false);
+    expect(isBookCreateFormReady({ ...form, genre: { category: "玄幻", detail: "宗门 加点" } })).toBe(true);
   });
 
   it("waits for the real Work artifact instead of treating task start as completion", async () => {

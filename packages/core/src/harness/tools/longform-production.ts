@@ -4,7 +4,7 @@ import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { PipelineRunner } from "../../pipeline/runner.js";
 import type { ActionPayload } from "../../interaction/action-envelope.js";
-import type { ReviseMode } from "../../agents/reviser.js";
+import { DEFAULT_REVISE_MODE, type ReviseMode } from "../../agents/reviser.js";
 import type { ActivatedSkillGuidance } from "../../agent/skill-tool.js";
 import { defaultChapterLength } from "../../utils/length-metrics.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../../utils/book-id.js";
@@ -12,7 +12,7 @@ import { mergeActivatedSkillGuidance } from "../../skills/activations.js";
 import { runAsWorkflowTrajectory } from "../../llm/agent-trajectory.js";
 import {StateManager} from "../../state/manager.js";
 import type {WorkManifest} from "../contracts.js";
-import type {BookConfig} from "../../models/book.js";
+import {BOOK_PLATFORM, type BookConfig} from "../../models/book.js";
 
 interface LongformToolOptions {
   readonly activeWork?: {readonly work:WorkManifest;readonly projectRoot:string};
@@ -35,8 +35,7 @@ const BookCreateParams = Type.Object({
   briefPath: Type.Optional(Type.String({ minLength: 1, description: "stored_path of an uploaded .md/.txt brief to pass verbatim; instruction is appended as additional requests." })),
   title: Type.Optional(Type.String()),
   bookId: Type.Optional(Type.String()),
-  genre: Type.Optional(Type.String()),
-  platform: Type.Optional(Type.String({ minLength: 1 })),
+  genre: Type.String({ minLength: 1, description: "The book's genre in the author's own words: a few words taken from the request or the brief, such as 玄幻修仙, 都市重生 or mystery. It selects the genre-specific writing guidance, and it is not read out of an uploaded brief, so state it here even when the brief names it." }),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -85,7 +84,7 @@ const ReviewChapterParams = Type.Object({
 });
 
 const ReviseChapterParams = Type.Object({
-  targetText:Type.Optional(Type.String({minLength:1,description:'For a localized paragraph or scene edit, first read the chapter and supply its exact unique source excerpt here, without display line-number prefixes. The host preserves all surrounding prose; the writer only replaces this selection.'})),
+  targetText:Type.Optional(Type.String({minLength:1,description:'Exact unique source excerpt to replace, without display line-number prefixes. Required for AIGC/Zhuque yellow or suspected spans so surrounding prose stays unchanged. Several spans: one call per excerpt, or list them in instruction and omit this field.'})),
   instruction: Type.String(),
   bookId: Type.Optional(Type.String()),
   chapterNumber: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -164,7 +163,7 @@ export function createBookFoundationTool(
     name: "create_book",
     label: "Create long-form Work",
     description: options.activeWork
-      ? "Initialize the current long-form Work's native book configuration and foundation. Preserve its Work ID; provide targetChapters and chapterWordCount from the user's request. An initialized book cannot be overwritten."
+      ? "Initialize the current long-form Work's native book configuration and foundation. Preserve its Work ID; provide genre, targetChapters and chapterWordCount from the user's request or brief. Every book is written for 番茄小说, so no platform is asked for. An uploaded brief reaches the foundation as prose, so these fields are not read out of it. An initialized book cannot be overwritten."
       : "Create one long-form Work foundation from the confirmed instruction.",
     parameters: BookCreateParams,
     async execute(_toolCallId, params: Static<typeof BookCreateParams>, signal, onUpdate) {
@@ -182,6 +181,9 @@ export function createBookFoundationTool(
           if(await state.isCompleteBookDirectory(state.bookDir(id)))throw Object.assign(new Error("The current book is already initialized; use its foundation or chapter revision action."),{code:"BOOK_ALREADY_INITIALIZED"});
           try{existing=await state.loadBookConfig(id);}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
         }
+        // Genre picks the genre-specific Skills for every later chapter, so a missing one is asked for, not defaulted.
+        const genre = payload?.genre?.trim() || params.genre?.trim() || existing?.genre?.trim();
+        if (!genre) throw Object.assign(new Error("create_book requires genre: state the book's genre in a few of the author's own words, taken from the request or the brief."), { code: "BOOK_GENRE_REQUIRED" });
         const language = existing?.language ?? (options.activeWork ? options.activeWork.work.language==="en"?"en":"zh" : payload?.language ?? params.language ?? options.language ?? "zh");
         const skills = activatedSkills(options, "architect");
         const now = new Date().toISOString();
@@ -190,8 +192,8 @@ export function createBookFoundationTool(
           ...existing,
           id,
           title,
-          genre: payload?.genre ?? params.genre ?? existing?.genre ?? "other",
-          platform: payload?.platform ?? params.platform ?? existing?.platform ?? "other",
+          genre,
+          platform: BOOK_PLATFORM,
           language,
           status: "outlining",
           targetChapters: payload?.targetChapters ?? params.targetChapters ?? existing?.targetChapters ?? 200,
@@ -255,7 +257,7 @@ export function createWriteChaptersTool(
   return {
     name: "write_chapters",
     label: "Write chapters",
-    description: "Write a specific consecutive range of new chapters. startChapterNumber must match the next unwritten chapter; an existing or skipped range is rejected before generation. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. This persists chapter artifacts and story state.",
+    description: "Write a specific consecutive range of new chapters. startChapterNumber must match the next unwritten chapter; an existing or skipped range is rejected before generation. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. The pipeline runs one semantic prose cleanup after review, followed by reader simulation and any focused revision; do not follow it with revise_chapter unless the user asked to revise. This persists chapter artifacts and story state.",
     parameters: WriteChaptersParams,
     async execute(_toolCallId, params: Static<typeof WriteChaptersParams>, signal, onUpdate) {
         const bookId = resolveBookId("write_chapters", params.bookId, activeBookId);
@@ -276,7 +278,7 @@ export function createWriteChaptersTool(
           status:checked.some(result=>result.delivery!.status==="needs_revision")?"needs_revision":"checks_passed",
           chapters:checked.map(result=>({chapterNumber:result.chapterNumber,...result.delivery})),
         }:undefined;
-        return textResult(`Completed ${results.length} chapter(s) for "${bookId}".`, {
+        return textResult(`Completed ${results.length} chapter(s) for "${bookId}". First draft kept; revise only if the author asked.`, {
           kind: results.length === 1 ? "chapter_written" : "chapters_written",
           bookId,
           requestedCount: count,
@@ -343,11 +345,11 @@ export function createReviseChapterTool(
   return {
     name: "revise_chapter",
     label: "Revise chapter",
-    description: "Revise one persisted chapter. For localized edits, read and bind targetText to keep every surrounding paragraph unchanged. Check the returned changedRegion before claiming the requested change is complete.",
+    description: "Revise one persisted chapter. Default mode is spot-fix. For AIGC/Zhuque yellow or suspected excerpts, set mode=spot-fix and bind targetText to each flagged source excerpt so surrounding prose stays unchanged; several spans may be separate calls. Use polish, rewrite, rework or anti-detect only when the user asked for that kind of change, never to clear a fresh chapter's review observations. Check the returned changedRegion before claiming the requested change is complete.",
     parameters: ReviseChapterParams,
     async execute(_toolCallId, params: Static<typeof ReviseChapterParams>, signal) {
         const bookId = resolveBookId("revise_chapter", params.bookId, activeBookId);
-        const mode = (params.mode ?? "rewrite") as ReviseMode;
+        const mode = (params.mode ?? DEFAULT_REVISE_MODE) as ReviseMode;
         const skills = activatedSkills(options, "reviser");
         const result = await runPipeline(
           pipeline,

@@ -82,7 +82,7 @@ describe("guardedPiNonStreaming", () => {
           mainCalls++;if(mainCalls===4)return finishResponse('delivered','Initialized');
           if(mainCalls>4)throw Error('Unexpected extra call');
           name=mainCalls===1?'workspace__create_work':'longform__create_book';
-          args=mainCalls===1?{workId:'generic',profileId:'custom-long',title:'Receipt',intent:'Two short chapters about returning a receipt.',language:'en'}:{instruction:'Initialize the existing story.',targetChapters:2,chapterWordCount:50,minChapterLength:10,maxChapterLength:60,...(mainCalls===2?{bookId:'escaped'}:{})};
+          args=mainCalls===1?{workId:'generic',profileId:'custom-long',title:'Receipt',intent:'Two short chapters about returning a receipt.',language:'en'}:{instruction:'Initialize the existing story.',genre:'literary',targetChapters:2,chapterWordCount:50,minChapterLength:10,maxChapterLength:60,...(mainCalls===2?{bookId:'escaped'}:{})};
         }
         return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:name+'-'+mainCalls,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}));
       });
@@ -90,22 +90,25 @@ describe("guardedPiNonStreaming", () => {
       expect(result.errorMessage).toBeUndefined();expect(result.workId).toBe('generic');
       const work=await loadWorkManifest(root,'generic');expect(work.profileId).toBe('custom-long');
       const path=join(root,'works/generic/source/book.json'),original=await readFile(path,'utf8');
-      expect(JSON.parse(original)).toMatchObject({id:'generic',title:'Receipt',targetChapters:2,chapterWordCount:50,minChapterLength:10,maxChapterLength:60});
+      expect(JSON.parse(original)).toMatchObject({id:'generic',title:'Receipt',genre:'literary',targetChapters:2,chapterWordCount:50,minChapterLength:10,maxChapterLength:60});
       await expect(loadWorkManifest(root,'escaped')).rejects.toMatchObject({code:'ENOENT'});
-      await expect(createBookFoundationTool(pipeline,{activeWork:{work,projectRoot:root}}).execute('again',{instruction:'Initialize again',targetChapters:999})).rejects.toMatchObject({code:'BOOK_ALREADY_INITIALIZED'});
+      await expect(createBookFoundationTool(pipeline,{activeWork:{work,projectRoot:root}}).execute('again',{instruction:'Initialize again',genre:'literary',targetChapters:999})).rejects.toMatchObject({code:'BOOK_ALREADY_INITIALIZED'});
       expect(await readFile(path,'utf8')).toBe(original);
       const canon="Mara retains the sealed receipt and returns it to its owner. ".repeat(1100);
       const boundedClient={...client,defaults:{...client.defaults,maxTokens:4096},_piModel:{...client._piModel!,contextWindow:30000,maxTokens:4096}};
       const calls:string[]=[];
       fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
-        const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;calls.push(name);
-        const args=name==="submit_chapter_draft"?{title:"Return",content:"Mara returns the sealed receipt. The owner checks the seal and accepts it."}:{factOps:{upsert:[]},hookOps:{upsert:[],resolve:[]},chapterSummary:{title:"Return",characters:"Mara",events:"Receipt returned",stateChanges:"Receipt returned.",hookActivity:"",mood:"calm",chapterType:"resolution"}};
+        const body=JSON.parse(String(init.body)),name=body.tools?.[0]?.function?.name??"plain_text";calls.push(name);
+        if(name==="plain_text")return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:"Chapter 1: Return\n\nMara returns the sealed receipt. The owner checks the seal and accepts it."}}]}));
+        const args={factOps:{upsert:[]},hookOps:{upsert:[],resolve:[]},chapterSummary:{title:"Return",characters:"Mara",events:"Receipt returned",stateChanges:"Receipt returned.",hookActivity:"",mood:"calm",chapterType:"resolution"}};
         return new Response(JSON.stringify({choices:[{finish_reason:"tool_calls",message:{tool_calls:[{id:name,type:"function",function:{name,arguments:JSON.stringify(args)}}]}}]}));
       });
       const chapter=await new WriterAgent({client:boundedClient,model:model.id,projectRoot:root,bookId:"generic"}).writeChapter({book:JSON.parse(original),bookDir:join(root,"works/generic/source"),chapterNumber:1,chapterIntent:"Return the receipt",chapterMemo:{chapter:1,goal:"Return the receipt",body:"The owner accepts the sealed receipt.",threadRefs:[]},contextPackage:{chapter:1,selectedContext:[{source:"story/parent_canon.md",reason:"Original ownership",excerpt:canon,protection:"protected"}]}});
       expect(chapter.chapterNumber).toBe(1);
+      expect(chapter.title).toBe("Return");
+      expect(chapter.content).toBe("Mara returns the sealed receipt. The owner checks the seal and accepts it.");
       expect(chapter.postSettlement).toBe("Receipt returned.");
-      expect(calls).toEqual(["submit_chapter_draft","submit_runtime_state_delta"]);
+      expect(calls).toEqual(["plain_text","submit_runtime_state_delta"]);
     }finally{evictAgentCache('initialization');await rm(root,{recursive:true,force:true});}
   });
   it('repairs an invalid world proposal before one commit and delivers without another main-model call',async()=>{
@@ -616,6 +619,27 @@ describe("guardedPiNonStreaming", () => {
     expect(user).toContain(direction);
     expect(user).toContain(guide);
     expect(user).toContain(original);
+  });
+
+  it("spot-fixes detection-flagged passages without restating the whole chapter", async () => {
+    const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+    fetchWithProxyMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      requests.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{
+        id: "spot", type: "function", function: { name: "submit_chapter_range_replacements", arguments: JSON.stringify({ range_0_content: "他摸了摸匣子。" }) },
+      }] } }] }));
+    });
+    const client = createLLMClient({ provider: "openai", service: "custom", configSource: "studio", baseUrl: model.baseUrl, model: model.id, apiKey: "fixture", apiFormat: "chat", stream: false, temperature: 0, thinkingBudget: 0 });
+    const original = "他数了两遍灵石。";
+    await new ReviserAgent({ client, model: model.id, projectRoot: "/tmp" }).reviseChapter("/tmp", original, 1, [{
+      code: "ZHUQUE-SUSPECTED-1", assessment: "issue", category: "quality",
+      summary: "这一段被判成疑似机器写作。", evidence: [original],
+    }], "spot-fix", undefined, { language: "zh", contextPackage: { chapter: 1, selectedContext: [] }, targetText: original });
+    const system = requests[0]!.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
+    expect(system).toContain("先选择局部请求涉及的原文行范围");
+    expect(system).toContain("检测为机器或疑似");
+    expect(system).toContain("不要写成流水账、规则清单或事后推演");
+    expect(system).not.toContain("逐句换一种说法重新写");
   });
 
   it("keeps the revision nearest the explicit length range when every retry misses only on length",async()=>{

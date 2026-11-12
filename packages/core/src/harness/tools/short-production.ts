@@ -44,7 +44,7 @@ export function createShortProductionStageTools(pipeline: PipelineRunner, root: 
         charsPerChapter: params.charsPerChapter, maxChapterLength: params.maxChapterLength, maxChaptersPerCall: params.maxChaptersPerCall ?? profile.production.maxChaptersPerCall,
         minChapterLengthRatio: profile.production.minChapterLengthRatio, reviewScope: params.reviewScope,
         signal, onProgress: message => onUpdate?.({ content: [{ type: "text", text: message }], details: { stage } }),
-        runtimes: { planner: pipeline.createAgentContext("short-outline"), writer: pipeline.createAgentContext("short-writer"),
+        runtimes: { planner: pipeline.createAgentContext("short-outline"), writer: pipeline.createAgentContext("short-writer"), reader: pipeline.createAgentContext("reader-simulator"),
           draftReview: pipeline.createAgentContext("short-draft-review"), package: pipeline.createAgentContext("short-package") },
       }));
       return { content: [{ type: "text", text: `${stage} ${result.stageStatus}: ${result.artifactPaths.join(", ")}` }], details: { kind: result.stageStatus === "failed" ? "short_stage_failed" : "short_stage_completed", workId: result.storyId, ...result } };

@@ -164,6 +164,7 @@ import {
   type AgentSessionAttachment,
   type ActionResult,
   type ConfirmedCapabilityBinding,
+  BOOK_PLATFORM,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -178,7 +179,7 @@ import {
   isPermittedStudioRequestHost,
   listLanIpv4Addresses,
 } from "./studio-host.js";
-import { buildStudioBookConfig, normalizeStudioPlatform } from "./book-create.js";
+import { buildStudioBookConfig } from "./book-create.js";
 import {
   deleteStudioTaskSnapshot,
   loadStudioTaskSnapshot,
@@ -1188,6 +1189,7 @@ async function executeConfirmedProductionAction(args: {
   if (args.requestedIntent === "create_book") {
     const payload = actionPayload?.createBook;
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
+    const genre = requirePayloadText(payload?.genre, pick(lang, "确认建书缺少题材，请重新生成确认卡。", "The book creation confirmation is missing a genre. Regenerate the confirmation card."));
     tool = createBookFoundationTool(args.pipeline, {
       language: lang,
       actionPayload,
@@ -1197,8 +1199,7 @@ async function executeConfirmedProductionAction(args: {
     params = {
       instruction: args.instruction,
       title,
-      ...(payload?.genre ? { genre: payload.genre } : {}),
-      ...(payload?.platform ? { platform: payload.platform } : {}),
+      genre,
       ...(payload?.language ? { language: payload.language } : {}),
       ...(payload?.targetChapters ? { targetChapters: payload.targetChapters } : {}),
       ...(payload?.chapterWordCount ? { chapterWordCount: payload.chapterWordCount } : {}),
@@ -1347,7 +1348,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload.sourceName ? { sourceName: payload.sourceName } : {}),
       mode: payload.mode ?? "canon",
       ...(payload.genre ? { genre: payload.genre } : {}),
-      ...(payload.platform ? { platform: payload.platform } : {}),
       language: payload.language ?? lang,
       ...(payload.targetChapters ? { targetChapters: payload.targetChapters } : {}),
       ...(payload.chapterWordCount ? { chapterWordCount: payload.chapterWordCount } : {}),
@@ -1374,7 +1374,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.splitPattern ? { splitPattern: payload.splitPattern } : {}),
       ...(payload?.resumeFrom ? { resumeFrom: payload.resumeFrom } : {}),
       ...(payload?.genre ? { genre: payload.genre } : {}),
-      ...(payload?.platform ? { platform: payload.platform } : {}),
       language: payload?.language ?? lang,
       ...(payload?.targetChapters ? { targetChapters: payload.targetChapters } : {}),
       ...(payload?.chapterWordCount ? { chapterWordCount: payload.chapterWordCount } : {}),
@@ -1395,7 +1394,6 @@ async function executeConfirmedProductionAction(args: {
       parentBookId,
       ...(payload?.direction ? { direction: payload.direction } : {}),
       ...(payload?.genre ? { genre: payload.genre } : {}),
-      ...(payload?.platform ? { platform: payload.platform } : {}),
       ...(payload?.language ? { language: payload.language } : {}),
       ...(payload?.targetChapters ? { targetChapters: payload.targetChapters } : {}),
       ...(payload?.chapterWordCount ? { chapterWordCount: payload.chapterWordCount } : {}),
@@ -1421,7 +1419,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload.referencePath ? { referencePath: payload.referencePath } : {}),
       ...(payload.sourceName ? { sourceName: payload.sourceName } : {}),
       ...(payload.genre ? { genre: payload.genre } : {}),
-      ...(payload.platform ? { platform: payload.platform } : {}),
       language: payload.language ?? lang,
       ...(payload.targetChapters ? { targetChapters: payload.targetChapters } : {}),
       ...(payload.chapterWordCount ? { chapterWordCount: payload.chapterWordCount } : {}),
@@ -2932,7 +2929,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       title: string;
       genre: string;
       language?: string;
-      platform?: string;
       chapterWordCount?: number;
       targetChapters?: number;
       blurb?: string;
@@ -2945,6 +2941,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     if (!bookId) {
       return c.json({ error: "Could not derive a valid book id from title" }, 400);
+    }
+    if (!body.genre?.trim()) {
+      return c.json({ error: "Book creation requires a genre" }, 400);
     }
     if (await completeBookExists(bookDir)) {
       return c.json({ error: `Book "${bookId}" already exists` }, 409);
@@ -2960,7 +2959,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         title: body.title,
         ...(body.genre ? { genre: body.genre } : {}),
         ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
-        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
         ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
         ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
       },
@@ -2979,7 +2977,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         instruction: body.blurb?.trim() || `Create ${body.title}`,
         title: body.title,
         ...(body.genre ? { genre: body.genre } : {}),
-        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
         ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
         ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
         ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
@@ -5873,7 +5870,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       targetChapters?: number;
       status?: string;
       language?: string;
+      genre?: string;
     }>();
+    const genre = updates.genre?.trim();
+    if (updates.genre !== undefined && !genre) {
+      return c.json({ error: "Genre cannot be empty" }, 400);
+    }
     try {
       const book = await state.loadBookConfig(id);
       const resolveOptionalLength = (
@@ -5910,6 +5912,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
         ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
+        ...(genre ? { genre } : {}),
         updatedAt: new Date().toISOString(),
       };
       await state.saveBookConfig(id, updated);
@@ -6166,7 +6169,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/fanfic/init", async (c) => {
     const body = await c.req.json<{
       title: string; sourceText: string; sourceName?: string;
-      mode?: string; genre?: string; platform?: string;
+      mode?: string; genre?: string;
       targetChapters?: number; chapterWordCount?: number; language?: string;
     }>();
     if (!body.title || !body.sourceText) {
@@ -6179,7 +6182,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookConfig = {
       id: bookId,
       title: body.title,
-      platform: (body.platform ?? "other") as "other",
+      platform: BOOK_PLATFORM,
       genre: (body.genre ?? "other") as "xuanhuan",
       status: "outlining" as const,
       targetChapters: body.targetChapters ?? 100,
@@ -6206,7 +6209,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           sourceName: body.sourceName ?? "source",
           mode: body.mode ?? "canon",
           genre: bookConfig.genre,
-          platform: bookConfig.platform,
           language: bookConfig.language,
           targetChapters: bookConfig.targetChapters,
           chapterWordCount: bookConfig.chapterWordCount,
@@ -6239,7 +6241,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/spinoff/init", async (c) => {
     const body = await c.req.json<{
       title: string; parentBookId: string; direction?: string;
-      genre?: string; platform?: string;
+      genre?: string;
       targetChapters?: number; chapterWordCount?: number; language?: string;
     }>();
     if (!body.title?.trim() || !body.parentBookId?.trim()) {
@@ -6256,7 +6258,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookConfig = buildStudioBookConfig({
       title: body.title,
       genre: body.genre ?? parent.genre ?? "other",
-      platform: body.platform ?? parent.platform,
       targetChapters: body.targetChapters ?? parent.targetChapters,
       chapterWordCount: body.chapterWordCount ?? parent.chapterWordCount,
       ...(language ? { language } : {}),
@@ -6285,7 +6286,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             parentBookId: body.parentBookId,
             direction: body.direction,
             genre: bookConfig.genre,
-            platform: bookConfig.platform,
             language: bookConfig.language,
             targetChapters: bookConfig.targetChapters,
             chapterWordCount: bookConfig.chapterWordCount,
@@ -6310,7 +6310,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/imitation/init", async (c) => {
     const body = await c.req.json<{
       title: string; referenceText: string; storyIdea: string; sourceName?: string;
-      genre?: string; platform?: string;
+      genre?: string;
       targetChapters?: number; chapterWordCount?: number; language?: string;
     }>();
     if (!body.title?.trim() || !body.referenceText?.trim() || !body.storyIdea?.trim()) {
@@ -6320,7 +6320,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookConfig = buildStudioBookConfig({
       title: body.title,
       genre: body.genre ?? "other",
-      platform: body.platform,
       targetChapters: body.targetChapters,
       chapterWordCount: body.chapterWordCount,
       ...(body.language ? { language: body.language as "zh" | "en" } : {}),
@@ -6350,7 +6349,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             storyIdea: body.storyIdea,
             sourceName: body.sourceName,
             genre: bookConfig.genre,
-            platform: bookConfig.platform,
             language: bookConfig.language,
             targetChapters: bookConfig.targetChapters,
             chapterWordCount: bookConfig.chapterWordCount,

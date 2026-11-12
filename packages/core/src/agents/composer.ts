@@ -745,7 +745,13 @@ async function selectCurrentStateEntries(params: {
   readonly selector?: OutlineSectionSelector;
 }): Promise<ContextPackage["selectedContext"]> {
   const snapshot = await loadRuntimeStateSnapshot(dirname(params.storyDir));
+  // Superseded facts stay in the store as history. Offered as current state they
+  // contradict their own replacements, so a fact is a candidate only if it was
+  // still in force when the target chapter began (a fact holds through its
+  // validUntilChapter). Source numbers keep the store's positions.
+  const lastChapterBefore = params.plan.intent.chapter - 1;
   const candidates = snapshot.currentState.facts.map((fact, index) => ({
+    active: fact.validUntilChapter === null || fact.validUntilChapter >= lastChapterBefore,
     source: `runtime/current_state#${index + 1}-${slugifyAnchor(`${fact.subject}-${fact.predicate}`)}`,
     heading: `${fact.subject} / ${fact.predicate}`,
     excerpt: [
@@ -755,7 +761,7 @@ async function selectCurrentStateEntries(params: {
       `validFromChapter: ${fact.validFromChapter}`,
       fact.validUntilChapter === null ? "validUntilChapter: current" : `validUntilChapter: ${fact.validUntilChapter}`,
     ].join("\n"),
-  }));
+  })).filter((candidate) => candidate.active).map(({ active: _active, ...candidate }) => candidate);
   if (candidates.length === 0) return [];
   if (!params.selector) throw new Error("Current-state semantic selector is required.");
   const selected = new Set(await params.selector({

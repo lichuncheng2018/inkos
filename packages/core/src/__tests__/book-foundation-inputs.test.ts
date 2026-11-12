@@ -2,11 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createProposeActionTool } from "../agent/agent-tools.js";
 import { ArchitectAgent } from "../agents/architect.js";
 import { createBookFoundationTool } from "../harness/tools/longform-production.js";
 import { ActionPayloadSchema } from "../interaction/action-envelope.js";
 import { createLLMClient } from "../llm/provider.js";
-import type { BookConfig } from "../models/book.js";
+import { BookConfigSchema, type BookConfig } from "../models/book.js";
 import { PipelineRunner, type InitBookOptions } from "../pipeline/runner.js";
 
 function fakePipeline() {
@@ -44,7 +45,7 @@ describe("create_book foundation inputs", () => {
       actionPayload: ActionPayloadSchema.parse({
         createBook: { title: "重生2001", briefPath: ".inkos/uploads/session/1-1-brief.md" },
       }),
-    }).execute("create", { instruction: "目标平台改为起点。" });
+    }).execute("create", { instruction: "目标平台改为起点。", genre: "年代工业" });
 
     expect(initBook.mock.calls[0]![1]).toEqual({
       externalContext: `${brief}\n\n## 建书对话补充\n目标平台改为起点。`,
@@ -65,7 +66,7 @@ describe("create_book foundation inputs", () => {
       ".inkos/uploads/session/notes.json",
     ]) {
       await expect(createBookFoundationTool(pipeline, { projectRoot: root })
-        .execute("create", { instruction: "Create", title: "Story", briefPath }))
+        .execute("create", { instruction: "Create", title: "Story", genre: "mystery", briefPath }))
         .rejects.toMatchObject({ code: "BRIEF_PATH_INVALID" });
     }
     expect(initBook).not.toHaveBeenCalled();
@@ -77,12 +78,57 @@ describe("create_book foundation inputs", () => {
     await createBookFoundationTool(pipeline, {
       authorIntent: "# 作者意图\n长期方向。\n",
       currentFocus: "  ",
-    }).execute("create", { instruction: "完整简报", title: "Story" });
+    }).execute("create", { instruction: "完整简报", title: "Story", genre: "mystery" });
 
     expect(initBook.mock.calls[0]![1]).toEqual({
       externalContext: "完整简报",
       authorIntent: "# 作者意图\n长期方向。",
     });
+  });
+
+  it("refuses to create a book whose genre nobody stated instead of filing it under a placeholder", async () => {
+    const { pipeline, initBook } = fakePipeline();
+    const tool = createBookFoundationTool(pipeline);
+
+    expect(tool.parameters.required).toContain("genre");
+    for (const genre of [undefined, "", "   "]) {
+      await expect(tool.execute("create", { instruction: "完整简报", title: "Story", genre } as never))
+        .rejects.toMatchObject({ code: "BOOK_GENRE_REQUIRED" });
+    }
+    expect(initBook).not.toHaveBeenCalled();
+  });
+
+  it("hands the stated genre to the foundation and writes every book for 番茄小说", async () => {
+    const { pipeline, initBook } = fakePipeline();
+    const tool = createBookFoundationTool(pipeline, {
+      actionPayload: { createBook: { title: "Story", genre: "玄幻修仙", platform: "起点中文网" } },
+    });
+
+    expect(Object.keys(tool.parameters.properties)).not.toContain("platform");
+    await tool.execute("create", { instruction: "完整简报", title: "Story", genre: " 玄幻修仙 " });
+
+    expect(initBook.mock.calls[0]![0]).toMatchObject({ genre: "玄幻修仙", platform: "番茄小说" });
+  });
+
+  it("reads an older book.json on another platform as 番茄小说", () => {
+    const book = BookConfigSchema.parse({
+      id: "old", title: "Old", platform: "other", genre: "other", status: "active",
+      targetChapters: 10, chapterWordCount: 3000, language: "zh",
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(book.platform).toBe("番茄小说");
+  });
+
+  it("only offers a create_book confirmation that names the genre", async () => {
+    const tool = createProposeActionTool("zh", { allowedActions: ["create_book"] });
+    const proposal = { action: "create_book", title: "创建《Story》", summary: "建立长篇基础设定。", instruction: "完整简报" };
+
+    expect(tool.parameters.properties.createBook.required).toContain("genre");
+    await expect(tool.execute("propose", { ...proposal, createBook: { title: "Story" } }))
+      .rejects.toThrow("createBook.genre");
+    const accepted = await tool.execute("propose", { ...proposal, createBook: { title: "Story", genre: "都市重生" } });
+    expect(accepted.details).toMatchObject({ action: "create_book", actionPayload: { createBook: { title: "Story", genre: "都市重生" } } });
   });
 
   it("persists supplied control documents next to the verbatim brief", async () => {

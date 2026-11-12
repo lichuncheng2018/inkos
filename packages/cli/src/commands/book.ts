@@ -6,7 +6,7 @@ import {
   createBookFoundationTool,
   deriveBookIdFromTitle,
   executeExplicitCapabilityTool,
-  PlatformSchema,
+  BOOK_PLATFORM,
   PipelineRunner,
   StateManager,
   workDirectory,
@@ -34,7 +34,6 @@ bookCommand
   .description("Create a new book with AI-generated foundation")
   .requiredOption("--title <title>", "Book title")
   .option("--genre <genre>", "Genre", "xuanhuan")
-  .option("--platform <platform>", "Target platform", "tomato")
   .option("--target-chapters <n>", "Target chapter count", "200")
   .option("--chapter-words <n>", "Words per chapter", "3000")
   .option("--brief <path>", "Path to creative brief file (.md/.txt) — Architect builds from your ideas instead of generating from scratch")
@@ -66,7 +65,7 @@ bookCommand
       const book: BookConfig = {
         id: bookId,
         title: opts.title,
-        platform: PlatformSchema.parse(opts.platform ?? "other"),
+        platform: BOOK_PLATFORM,
         genre: opts.genre,
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),

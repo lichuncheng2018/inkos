@@ -20,6 +20,8 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip";
 import { chaptersNewestFirst } from "../lib/chapter-list";
+import { genreCategoriesForLanguage, joinGenre, splitGenre, type GenreParts } from "../lib/genre";
+import { GenreFields } from "../components/GenreFields";
 import { cn } from "../lib/utils";
 import {
   ChevronDown,
@@ -68,6 +70,7 @@ interface BookData {
     readonly id: string;
     readonly title: string;
     readonly genre: string;
+    readonly platform?: string;
     readonly status: string;
     readonly chapterWordCount: number;
     readonly minChapterLength?: number;
@@ -135,6 +138,7 @@ export function BookDetail({
   const [settingsMaxChapterLengthCleared, setSettingsMaxChapterLengthCleared] = useState(false);
   const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(null);
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
+  const [settingsGenre, setSettingsGenre] = useState<GenreParts | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   const [phoneStatus, setPhoneStatus] = useState<PhoneSyncStatusView | null>(null);
@@ -215,9 +219,7 @@ export function BookDetail({
 
   const handleRevise = async (chapterNum: number, mode: ReviseMode) => {
     const brief = window.prompt(
-      data?.book.language === "en"
-        ? "Optional revise brief for this run only. Leave blank to use existing focus."
-        : "可选：输入这次修订要遵循的补充想法。留空则沿用现有 focus。",
+      mode === "spot-fix" ? t("book.spotFixBriefPrompt") : t("book.reviseBriefPrompt"),
       "",
     );
     if (brief === null) return;
@@ -276,9 +278,15 @@ export function BookDetail({
       alert(t("book.chapterLengthRangeInvalid"));
       return;
     }
+    const genre = settingsGenre ? joinGenre(settingsGenre) : undefined;
+    if (settingsGenre && !genre) {
+      alert(t("book.genreCategoryRequired"));
+      return;
+    }
     setSavingSettings(true);
     try {
       const body: Record<string, unknown> = {};
+      if (genre) body.genre = genre;
       if (settingsWordCount !== null) body.chapterWordCount = settingsWordCount;
       if (settingsMinChapterLengthCleared) body.minChapterLength = null;
       else if (settingsMinChapterLength !== null) body.minChapterLength = settingsMinChapterLength;
@@ -295,6 +303,7 @@ export function BookDetail({
       setSettingsMaxChapterLengthCleared(false);
       setSettingsMinChapterLength(null);
       setSettingsMaxChapterLength(null);
+      setSettingsGenre(null);
       refetch();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Save failed");
@@ -463,6 +472,8 @@ export function BookDetail({
     : String(settingsMaxChapterLength ?? book.maxChapterLength ?? "");
   const currentTargetChapters = settingsTargetChapters ?? book.targetChapters ?? 0;
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
+  const bookLanguage = book.language === "en" ? "en" : "zh";
+  const currentGenre = settingsGenre ?? splitGenre(book.genre, genreCategoriesForLanguage(bookLanguage));
 
   const exportHref = `/api/v1/books/${bookId}/export?format=${exportFormat}`;
 
@@ -679,6 +690,23 @@ export function BookDetail({
         <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">{t("book.settings")}</h2>
         <p className="text-xs text-muted-foreground mb-4">{t("book.chapterLengthRangeHint")}</p>
         <div className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.genre")}</label>
+            <GenreFields
+              language={bookLanguage}
+              value={currentGenre}
+              onChange={setSettingsGenre}
+              categoryPlaceholder={t("book.genreCategory")}
+              detailPlaceholder={t("book.genreDetail")}
+              className="flex gap-2"
+              selectClassName="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50"
+              inputClassName="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-64"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.platform")}</label>
+            <span className="px-3 py-2 text-sm rounded-lg border border-border/30 text-muted-foreground">{book.platform}</span>
+          </div>
           <div className="flex flex-col gap-1">
             <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.wordsPerChapter")}</label>
             <input

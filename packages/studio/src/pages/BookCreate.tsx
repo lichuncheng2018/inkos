@@ -4,21 +4,17 @@ import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { GenreFields } from "../components/GenreFields";
+import { joinGenre, type GenreParts } from "../lib/genre";
 
 interface Nav {
   toDashboard: () => void;
   toBook: (id: string) => void;
 }
 
-interface PlatformOption {
-  readonly value: string;
-  readonly label: string;
-}
-
 export interface BookCreateFormState {
   readonly title: string;
-  readonly genre: string;
-  readonly platform: string;
+  readonly genre: GenreParts;
   readonly targetChapters: string;
   readonly chapterWordCount: string;
   readonly brief: string;
@@ -27,7 +23,6 @@ export interface BookCreateFormState {
 export interface BookCreatePayload {
   readonly title: string;
   readonly genre: string;
-  readonly platform: string;
   readonly language: "zh" | "en";
   readonly targetChapters: number;
   readonly chapterWordCount: number;
@@ -40,8 +35,8 @@ interface PlatformCopy {
   readonly titleLabel: string;
   readonly titlePlaceholder: string;
   readonly genreLabel: string;
-  readonly genrePlaceholder: string;
-  readonly platformLabel: string;
+  readonly genreCategoryPlaceholder: string;
+  readonly genreDetailPlaceholder: string;
   readonly targetChaptersLabel: string;
   readonly chapterWordCountLabel: string;
   readonly briefLabel: string;
@@ -52,29 +47,15 @@ interface PlatformCopy {
   readonly creationSteps: ReadonlyArray<string>;
 }
 
-const PLATFORMS_ZH: ReadonlyArray<PlatformOption> = [
-  { value: "tomato", label: "番茄小说" },
-  { value: "qidian", label: "起点中文网" },
-  { value: "feilu", label: "飞卢" },
-  { value: "other", label: "其他" },
-];
-
-const PLATFORMS_EN: ReadonlyArray<PlatformOption> = [
-  { value: "royal-road", label: "Royal Road" },
-  { value: "kindle-unlimited", label: "Kindle Unlimited" },
-  { value: "scribble-hub", label: "Scribble Hub" },
-  { value: "other", label: "Other" },
-];
-
 const PAGE_COPY: Record<"zh" | "en", PlatformCopy> = {
   zh: {
     heading: "创建长篇 Work",
     hint: "这里提交的是明确建书动作。想先讨论和完善方向，请回到 Studio Chat 自然交流，确认卡会携带同一份结构化建书参数。",
     titleLabel: "书名",
     titlePlaceholder: "例如：夜港账本",
-    genreLabel: "题材 / 类型",
-    genrePlaceholder: "例如：都市悬疑、玄幻、科幻、女频情感",
-    platformLabel: "目标平台",
+    genreLabel: "题材",
+    genreCategoryPlaceholder: "选择大类",
+    genreDetailPlaceholder: "细分题材（选填），例如：宗门 加点 系统",
     targetChaptersLabel: "目标章数",
     chapterWordCountLabel: "每章字数",
     briefLabel: "故事简介 / 核心设定",
@@ -90,8 +71,8 @@ const PAGE_COPY: Record<"zh" | "en", PlatformCopy> = {
     titleLabel: "Title",
     titlePlaceholder: "Example: Ledger of the Night Port",
     genreLabel: "Genre",
-    genrePlaceholder: "Example: mystery, urban fantasy, sci-fi, romance",
-    platformLabel: "Target platform",
+    genreCategoryPlaceholder: "Choose a category",
+    genreDetailPlaceholder: "Sub-genre (optional), e.g. sect, system, slow burn",
     targetChaptersLabel: "Target chapters",
     chapterWordCountLabel: "Words per chapter",
     briefLabel: "Story brief / core premise",
@@ -103,23 +84,14 @@ const PAGE_COPY: Record<"zh" | "en", PlatformCopy> = {
   },
 };
 
-export function pickValidValue(current: string, available: ReadonlyArray<string>): string {
-  return current && available.includes(current) ? current : available[0] ?? "";
-}
-
 export function defaultChapterWordsForLanguage(language: "zh" | "en"): string {
   return language === "en" ? "2000" : "3000";
-}
-
-export function platformOptionsForLanguage(language: "zh" | "en"): ReadonlyArray<PlatformOption> {
-  return language === "en" ? PLATFORMS_EN : PLATFORMS_ZH;
 }
 
 export function defaultBookCreateForm(language: "zh" | "en"): BookCreateFormState {
   return {
     title: "",
-    genre: "",
-    platform: platformOptionsForLanguage(language)[0]?.value ?? "other",
+    genre: { category: "", detail: "" },
     targetChapters: "200",
     chapterWordCount: defaultChapterWordsForLanguage(language),
     brief: "",
@@ -134,8 +106,7 @@ function parsePositiveInteger(value: string): number | null {
 export function isBookCreateFormReady(form: BookCreateFormState): boolean {
   return Boolean(
     form.title.trim()
-      && form.genre.trim()
-      && form.platform.trim()
+      && joinGenre(form.genre)
       && form.brief.trim()
       && parsePositiveInteger(form.targetChapters)
       && parsePositiveInteger(form.chapterWordCount),
@@ -150,8 +121,7 @@ export function buildBookCreatePayload(form: BookCreateFormState, language: "zh"
   }
   return {
     title: form.title.trim(),
-    genre: form.genre.trim(),
-    platform: form.platform.trim(),
+    genre: joinGenre(form.genre),
     language,
     targetChapters,
     chapterWordCount,
@@ -203,7 +173,6 @@ export function BookCreate({ nav, theme, t: _t }: { nav: Nav; theme: Theme; t: T
   const { data: project } = useApi<{ language: string }>("/project");
   const projectLang = project?.language === "en" ? "en" : "zh";
   const copy = PAGE_COPY[projectLang];
-  const platformChoices = platformOptionsForLanguage(projectLang);
   const [form, setForm] = useState<BookCreateFormState>(() => defaultBookCreateForm(projectLang));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,7 +181,6 @@ export function BookCreate({ nav, theme, t: _t }: { nav: Nav; theme: Theme; t: T
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      platform: pickValidValue(current.platform, platformOptionsForLanguage(projectLang).map((option) => option.value)),
       chapterWordCount: current.chapterWordCount || defaultChapterWordsForLanguage(projectLang),
     }));
   }, [projectLang]);
@@ -254,18 +222,21 @@ export function BookCreate({ nav, theme, t: _t }: { nav: Nav; theme: Theme; t: T
               <span className="text-xs font-medium text-muted-foreground">{copy.titleLabel}</span>
               <input value={form.title} onChange={(event) => updateForm({ title: event.target.value })} className={`w-full ${c.input} rounded-md px-3 py-2.5 text-sm focus:outline-none`} placeholder={copy.titlePlaceholder} />
             </label>
-            <label className="space-y-2">
+            <div className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.genreLabel}</span>
-              <input value={form.genre} onChange={(event) => updateForm({ genre: event.target.value })} className={`w-full ${c.input} rounded-md px-3 py-2.5 text-sm focus:outline-none`} placeholder={copy.genrePlaceholder} />
-            </label>
+              <GenreFields
+                language={projectLang}
+                value={form.genre}
+                onChange={(genre) => updateForm({ genre })}
+                categoryPlaceholder={copy.genreCategoryPlaceholder}
+                detailPlaceholder={copy.genreDetailPlaceholder}
+                className="flex gap-2"
+                selectClassName={`shrink-0 ${c.input} rounded-md bg-background px-3 py-2.5 text-sm focus:outline-none`}
+                inputClassName={`min-w-0 flex-1 ${c.input} rounded-md px-3 py-2.5 text-sm focus:outline-none`}
+              />
+            </div>
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <label className="space-y-2">
-              <span className="text-xs font-medium text-muted-foreground">{copy.platformLabel}</span>
-              <select value={form.platform} onChange={(event) => updateForm({ platform: event.target.value })} className={`w-full ${c.input} rounded-md bg-background px-3 py-2.5 text-sm focus:outline-none`}>
-                {platformChoices.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
+          <div className="grid gap-4 sm:grid-cols-2">
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.targetChaptersLabel}</span>
               <input type="number" min={1} value={form.targetChapters} onChange={(event) => updateForm({ targetChapters: event.target.value })} className={`w-full ${c.input} rounded-md px-3 py-2.5 text-sm focus:outline-none`} />

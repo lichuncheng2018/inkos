@@ -9,10 +9,12 @@ import {
   createWorkManifest,
   listWorkManifests,
   loadWorkManifest,
+  mergeWorkMetadata,
   saveWorkManifest,
   workDirectory,
 } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import type { WorkManifest } from "../harness/contracts.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
@@ -383,31 +385,37 @@ export class StateManager {
   }
 
   async saveBookConfig(bookId: string, config: BookConfig): Promise<void> {
-    await this.saveBookConfigAt(this.bookDir(bookId), config);
+    const saved = await this.saveBookConfigAt(this.bookDir(bookId), config);
+    let manifest: WorkManifest | undefined;
     try {
-      await loadWorkManifest(this.projectRoot, bookId);
+      manifest = await loadWorkManifest(this.projectRoot, bookId);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!manifest) {
       await saveWorkManifest(this.projectRoot, createWorkManifest({
         id: bookId,
-        title: config.title,
+        title: saved.title,
         profileId: "longform-novel",
-        language: config.language,
-        now: config.createdAt,
-        lineage: config.parentBookId
-          ? [{ relation: "derived-from", sourceWorkId: config.parentBookId }]
+        language: saved.language,
+        now: saved.createdAt,
+        lineage: saved.parentBookId
+          ? [{ relation: "derived-from", sourceWorkId: saved.parentBookId }]
           : [],
         metadata: {
-          genre: config.genre,
-          platform: config.platform,
-          ...(config.fanficMode ? { fanficMode: config.fanficMode } : {}),
+          genre: saved.genre,
+          platform: saved.platform,
+          ...(saved.fanficMode ? { fanficMode: saved.fanficMode } : {}),
         },
       }));
+    } else if (manifest.metadata.genre !== saved.genre || manifest.metadata.platform !== saved.platform) {
+      // The Work manifest's genre is what selects genre-specific Skills, so it follows book.json.
+      await mergeWorkMetadata(this.projectRoot, bookId, { genre: saved.genre, platform: saved.platform });
     }
-    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: config.updatedAt, accept: true, acceptPaths: ["source/book.json"] });
+    await syncWorkSourceArtifacts({ projectRoot: this.projectRoot, workId: bookId, updatedAt: saved.updatedAt, accept: true, acceptPaths: ["source/book.json"] });
   }
 
-  async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {
+  async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<BookConfig> {
     const parsed = BookConfigSchema.parse(config);
     await mkdir(bookDir, { recursive: true });
     await writeFile(
@@ -415,6 +423,7 @@ export class StateManager {
       JSON.stringify(parsed, null, 2),
       "utf-8",
     );
+    return parsed;
   }
 
   async listBooks(): Promise<ReadonlyArray<string>> {

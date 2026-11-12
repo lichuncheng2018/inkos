@@ -1,5 +1,5 @@
 // Models
-export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema } from "./models/book.js";
+export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, BOOK_PLATFORM, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema } from "./models/book.js";
 export { type ChapterMeta, ChapterMetaSchema } from "./models/chapter.js";
 export { type Observation, ObservationSchema } from "./models/observation.js";
 export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
@@ -422,6 +422,7 @@ export { BaseAgent, type AgentContext } from "./agents/base.js";
 export { ArchitectAgent, type ArchitectOutput } from "./agents/architect.js";
 export { WriterAgent, type WriteChapterInput, type WriteChapterOutput, type TokenUsage } from "./agents/writer.js";
 export { ContinuityAuditor, type AuditResult } from "./agents/continuity.js";
+export { ReaderSimulatorAgent, type ReaderSimulationInput, type ReaderSimulationResult } from "./agents/reader-simulator.js";
 export { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseOutput, type ReviseMode } from "./agents/reviser.js";
 export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";

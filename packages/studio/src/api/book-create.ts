@@ -1,4 +1,4 @@
-import { PlatformSchema, defaultChapterLength, type Platform } from "@actalk/inkos-core";
+import { BOOK_PLATFORM, defaultChapterLength, type Platform } from "@actalk/inkos-core";
 export { waitForStudioBookReady } from "../lib/book-ready.js";
 export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready.js";
 
@@ -6,7 +6,6 @@ export interface StudioCreateBookBody {
   readonly title: string;
   readonly genre: string;
   readonly language?: string;
-  readonly platform?: string;
   readonly chapterWordCount?: number;
   readonly minChapterLength?: number;
   readonly maxChapterLength?: number;
@@ -29,10 +28,6 @@ export interface StudioBookConfigDraft {
   readonly updatedAt: string;
 }
 
-export function normalizeStudioPlatform(platform?: string): Platform {
-  return platform === undefined ? "other" : PlatformSchema.parse(platform);
-}
-
 export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): StudioBookConfigDraft {
   return {
     id: body.title
@@ -41,7 +36,7 @@ export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): 
       .replace(/-+/g, "-")
       .slice(0, 30),
     title: body.title,
-    platform: normalizeStudioPlatform(body.platform),
+    platform: BOOK_PLATFORM,
     genre: body.genre,
     status: "outlining",
     targetChapters: body.targetChapters ?? 200,

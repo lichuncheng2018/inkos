@@ -160,7 +160,7 @@ configCommand
     }
   });
 
-const KNOWN_AGENTS = ["writer", "auditor", "reviser", "architect", "radar", "chapter-analyzer"] as const;
+const KNOWN_AGENTS = ["writer", "auditor", "reviser", "reader-simulator", "architect", "radar", "chapter-analyzer"] as const;
 const ENV_VAR_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function validateApiKeyEnvName(value: string): string | undefined {

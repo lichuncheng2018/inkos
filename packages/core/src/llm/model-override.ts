@@ -21,6 +21,11 @@ export interface ResolvedAgentOverride {
   readonly cacheKey?: string;
 }
 
+export const DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE: AgentLLMOverride = {
+  service: "deepseek",
+  model: "deepseek-flash",
+};
+
 export function catalogServiceKey(entry: Pick<CatalogServiceEntry, "service" | "name">): string {
   return entry.service === "custom" ? `custom:${entry.name ?? "Custom"}` : entry.service;
 }

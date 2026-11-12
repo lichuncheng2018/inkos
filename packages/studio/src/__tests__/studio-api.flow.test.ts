@@ -122,6 +122,56 @@ describe("Studio API mini-flows", () => {
     expect(withoutBounds.maxChapterLength).toBeUndefined();
   });
 
+  it("saves a genre from book settings into book.json and the Work manifest, on the 番茄小说 platform", async () => {
+    const initial = createInitialWorkManifestWrite({
+      workId: "genre-book", title: "Genre", profileId: "longform-novel", language: "zh", writes: [],
+    });
+    await mkdir(join(root, "works", "genre-book", "source"), { recursive: true });
+    await writeFile(join(root, initial.write.relativePath), initial.write.content);
+    await writeFile(join(root, "works/genre-book/source/book.json"), JSON.stringify({
+      id: "genre-book", title: "Genre", platform: "other", genre: "other",
+      status: "active", targetChapters: 10, chapterWordCount: 3000, language: "zh",
+      createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z",
+    }));
+    const app = createStudioServer({} as never, root);
+    const put = (body: unknown) => app.request("/api/v1/books/genre-book", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+
+    expect((await put({ genre: "   " })).status).toBe(400);
+    expect((await put({ genre: " 玄幻/宗门 加点 " })).status).toBe(200);
+
+    const saved = JSON.parse(await readFile(join(root, "works/genre-book/source/book.json"), "utf-8"));
+    expect(saved).toMatchObject({ genre: "玄幻/宗门 加点", platform: "番茄小说" });
+    const manifest = JSON.parse(await readFile(join(root, "works/genre-book/work.json"), "utf-8"));
+    expect(manifest.metadata).toMatchObject({ genre: "玄幻/宗门 加点", platform: "番茄小说" });
+  });
+
+  it("saves a genre from book settings into book.json and the Work manifest, on the 番茄小说 platform", async () => {
+    const initial = createInitialWorkManifestWrite({
+      workId: "genre-book", title: "Genre", profileId: "longform-novel", language: "zh", writes: [],
+    });
+    await mkdir(join(root, "works", "genre-book", "source"), { recursive: true });
+    await writeFile(join(root, initial.write.relativePath), initial.write.content);
+    await writeFile(join(root, "works/genre-book/source/book.json"), JSON.stringify({
+      id: "genre-book", title: "Genre", platform: "other", genre: "other",
+      status: "active", targetChapters: 10, chapterWordCount: 3000, language: "zh",
+      createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z",
+    }));
+    const app = createStudioServer({} as never, root);
+    const put = (body: unknown) => app.request("/api/v1/books/genre-book", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+
+    expect((await put({ genre: "   " })).status).toBe(400);
+    expect((await put({ genre: " 玄幻/宗门 加点 " })).status).toBe(200);
+
+    const saved = JSON.parse(await readFile(join(root, "works/genre-book/source/book.json"), "utf-8"));
+    expect(saved).toMatchObject({ genre: "玄幻/宗门 加点", platform: "番茄小说" });
+    const manifest = JSON.parse(await readFile(join(root, "works/genre-book/work.json"), "utf-8"));
+    expect(manifest.metadata).toMatchObject({ genre: "玄幻/宗门 加点", platform: "番茄小说" });
+  });
+
   it("lists initialized books while preserving an unfinished Work in the canonical library", async () => {
     for (const id of ["ready-book", "unfinished-book"]) {
       const initial = createInitialWorkManifestWrite({

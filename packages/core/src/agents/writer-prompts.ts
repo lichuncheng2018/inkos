@@ -39,9 +39,15 @@ export function buildWriterSystemPrompt(
 function governedContract(language: "zh" | "en"): string {
   return language === "en"
     ? `## Authority
-The current user instruction and chapter memo govern this chapter. Established facts, explicit prohibitions, selected context, and real hook ids remain binding. The outline is a fallback only when it does not conflict with higher authority. Realize the memo requirements through events and outcomes. Planning, inventory and validation wording is not a prose template: express it using the active style guidance without reciting its checklist. Do not duplicate or rename an existing narrative promise.`
+The current chapter instruction and the chapter memo govern this chapter. Established facts, explicit prohibitions and the setting in the reference notes remain binding. The outline is a fallback only where the memo is silent. Realize the memo requirements through events and outcomes. Planning, inventory and validation wording is not a prose template: express it using the active style guidance without reciting its checklist. Do not duplicate or rename an existing narrative promise.
+
+## Voice
+The narration has one voice. Take it from the first of these that speaks to the point, and use the later ones only for what the earlier ones leave open, never as a second voice alongside: a style request the author made this turn; the style agreed in the author intent; the style guide; style clauses in the book rules; the activated voice Skill; the general writing Skill's defaults.`
     : `## 权威顺序
-当前用户指令和 chapter memo 决定本章任务；既成事实、显式禁令、已选上下文和真实 hook id 必须保留。卷纲仅在无冲突时作为兜底。memo 已填写的要求通过事件与结果落地；规划、账本和验收用语不作为正文模板，应按当前文风要求自然表达，不照抄核对清单。不要为同一承诺重复开 hook，也不要改名既有叙事承诺。`;
+本章指令和章纲决定本章任务；既成事实、显式禁令和写作参考里的设定必须保持一致。卷纲只在章纲没有覆盖的地方作为兜底。章纲的要求通过事件与结果落地；规划、账本和验收用语不作为正文模板，应按当前文风要求自然表达，不照抄核对清单。不要为同一承诺重复开 hook，也不要改名既有叙事承诺。
+
+## 文风来源
+全章只用一套叙述口吻，按下面的顺序取：用户这一轮亲口提的文风要求；作者意图里的文风约定；文风指南；本书规则里的文风条款；已激活的文风 Skill；通用写作 Skill 的默认表达。靠前的有明确约定时，靠后的只补它没说到的地方，不并用两套口吻。`;
 }
 
 function lengthContract(spec: LengthSpec, language: "zh" | "en"): string {

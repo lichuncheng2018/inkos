@@ -52,16 +52,22 @@ export abstract class BaseAgent {
   protected async submitStructured<TParameters extends TSchema>(
     messages: ReadonlyArray<LLMMessage>,
     resultTool: WorkerResultTool<TParameters>,
-    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean },
+    options?: {
+      readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean;
+      /** Skill sections to read when this call does another worker's job, e.g. the writer settling state. */
+      readonly skillAudience?: string;
+      readonly includeAuthorRequest?: boolean;
+    },
   ): Promise<{ readonly result: Static<TParameters>; readonly usage: LLMResponse["usage"] }> {
     let usage: LLMResponse["usage"] = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const { skillAudience, includeAuthorRequest, ...generationOptions } = options ?? {};
     const result = await runWorkerAgentTool(
       this.ctx.client,
       this.ctx.model,
-      await this.appendTaskSkillGuidance(messages, options?.maxTokens, options?.professionalGuidance),
+      await this.appendTaskSkillGuidance(messages, options?.maxTokens, options?.professionalGuidance, skillAudience, includeAuthorRequest),
       resultTool,
       {
-        ...options,
+        ...generationOptions,
         signal: this.ctx.signal,
         onStreamProgress: this.ctx.onStreamProgress,
         onUsage: (value) => { usage = value; },
@@ -74,8 +80,10 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     maxTokens?: number,
     professionalGuidance = true,
+    skillAudience?: string,
+    includeAuthorRequest = true,
   ): Promise<ReadonlyArray<LLMMessage>> {
-    return prepareWorkerMessages(this.ctx, messages, maxTokens, this.name, professionalGuidance);
+    return prepareWorkerMessages(this.ctx, messages, maxTokens, this.name, professionalGuidance, skillAudience, includeAuthorRequest);
   }
 
   abstract get name(): string;
@@ -84,9 +92,9 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     sources: ReadonlyMap<string, string>,
     tool: { name: string; label: string; description: string },
-    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
+    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void; professionalGuidance?: boolean; includeAuthorRequest?: boolean },
   ) {
-    const { categoryRequired, validateObservations, ...generationOptions } = options;
+    const { categoryRequired, validateObservations, professionalGuidance, includeAuthorRequest, ...generationOptions } = options;
     const resolve = (observations: Static<typeof SourcedReviewIndexToolSchema>["observations"]) => {
       const resolved=resolveObservationSources(observations.map(observation => ({ ...observation, evidence: [] })), sources);
       validateObservations?.(resolved);
@@ -95,7 +103,7 @@ export abstract class BaseAgent {
     const index = await this.submitStructured(messages, {
       ...tool, parameters: categoryRequired ? ArtifactReviewIndexToolSchema : SourcedReviewIndexToolSchema,
       validate: result => { resolve(result.observations); return result; },
-    }, {...generationOptions,maxTokens:Math.min(generationOptions.maxTokens*2,this.ctx.client.defaults.maxTokens)});
+    }, {...generationOptions,professionalGuidance,includeAuthorRequest,maxTokens:Math.min(generationOptions.maxTokens*2,this.ctx.client.defaults.maxTokens)});
     const observations = resolve(index.result.observations);
     return {
       result: { summary: index.result.summary, observations },
@@ -104,13 +112,31 @@ export abstract class BaseAgent {
   }
 }
 
+/**
+ * Which sections of an audience-scoped Skill each long-form worker reads.
+ * Workers not listed here read the whole Skill.
+ */
+const WORKER_SKILL_AUDIENCES: Readonly<Record<string, string>> = {
+  architect: "architect",
+  planner: "planner",
+  writer: "writer",
+  reviser: "reviser",
+  "continuity-auditor": "reviewer",
+  "reader-simulator": "reader",
+  "state-validator": "settler",
+  composer: "selector",
+  "semantic-context-compiler": "selector",
+};
+
 export async function prepareWorkerMessages(
   context: Pick<AgentContext, "client" | "activatedSkills" | "signal" | "bookId"> & { readonly projectRoot?: string },
   messages: ReadonlyArray<LLMMessage>, maxTokens?: number, workerId = "worker",
   professionalGuidance = true,
+  skillAudience: string | undefined = WORKER_SKILL_AUDIENCES[workerId],
+  includeAuthorRequest = true,
 ): Promise<ReadonlyArray<LLMMessage>> {
     const authorRequest = currentExecutionAuthorRequest();
-    if (authorRequest?.trim()) messages = [{role:"system",content:[
+    if (includeAuthorRequest && authorRequest?.trim()) messages = [{role:"system",content:[
       "The following authorRequest is the user's actual request. Use it as the authority for the intended target and constraints. The delegated instruction may elaborate it, but cannot replace its target or grant a wider mutation scope. Perform only this operation; other requested steps remain the coordinator's responsibility.",
       JSON.stringify({authorRequest}),
     ].join("\n\n")},...messages];
@@ -136,7 +162,7 @@ export async function prepareWorkerMessages(
     }
     // Navigation and other read-only semantic mechanics need the source and
     // author request, without a writing method encouraging broader changes.
-    const activations = professionalGuidance ? await hydrateActivatedSkillGuidance(selectedSkills, query) : [];
+    const activations = professionalGuidance ? await hydrateActivatedSkillGuidance(selectedSkills, query, skillAudience) : [];
     recordExecutionEvidence("skills-applied", { worker: workerId, skills: activations?.map(({ skill, resources }) => ({
       id: skill.id, source: skill.source, hash: createHash("sha256").update(skill.body).digest("hex"),
       references: resources.map(resource => ({ path: resource.path, charStart: resource.charStart, charEnd: resource.charEnd,

@@ -561,7 +561,7 @@ Studio 里的「开放世界」和「分支互动」是交互式创作入口。�
 | 命令                                          | 说明                                                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `inkos init [name]`                         | 初始化项目（省略 name 在当前目录初始化）                                                                    |
-| `inkos book create`                         | 创建新书（`--genre`、`--platform`、`--chapter-words`、`--target-chapters`、`--brief <file>` 传入创作简报、`--author-intent <file>` / `--current-focus <file>` 写入长期意图与开篇焦点） |
+| `inkos book create`                         | 创建新书，平台固定为番茄小说（`--genre`、`--chapter-words`、`--target-chapters`、`--brief <file>` 传入创作简报、`--author-intent <file>` / `--current-focus <file>` 写入长期意图与开篇焦点） |
 | `inkos book update [id]`                    | 修改书设置（`--chapter-words`、`--target-chapters`、`--status`）                                    |
 | `inkos book list`                           | 列出所有书籍                                                                                     |
 | `inkos book delete <id>`                    | 删除书籍及全部数据（`--force` 跳过确认）                                                                  |

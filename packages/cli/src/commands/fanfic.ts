@@ -6,7 +6,7 @@ import {
   createRefreshFanficCanonTool,
   deriveBookIdFromTitle,
   executeExplicitCapabilityTool,
-  PlatformSchema,
+  BOOK_PLATFORM,
   PipelineRunner,
   type BookConfig,
   type FanficMode,
@@ -28,7 +28,6 @@ fanficCommand
   .requiredOption("--from <path>", "Source file or directory (novel text, wiki, character docs)")
   .option("--mode <mode>", "Fanfiction boundary or mode in natural language", "canon")
   .option("--genre <genre>", "Genre", "other")
-  .option("--platform <platform>", "Target platform", "other")
   .option("--target-chapters <n>", "Target chapter count", "100")
   .option("--chapter-words <n>", "Words per chapter", "3000")
   .option("--lang <language>", "Writing language: zh or en. Defaults from the project.")
@@ -53,7 +52,7 @@ fanficCommand
       const book: BookConfig = {
         id: bookId,
         title: opts.title,
-        platform: PlatformSchema.parse(opts.platform ?? "other"),
+        platform: BOOK_PLATFORM,
         genre: opts.genre,
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),

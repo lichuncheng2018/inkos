@@ -17,7 +17,8 @@ async function readFileOrDefault(path: string): Promise<string> {
   }
 }
 
-async function readPreviousEndingExcerpt(
+/** Body of the chapter before `chapterNumber`, without its heading line. */
+export async function readPreviousEndingExcerpt(
   bookDir: string,
   chapterNumber: number,
 ): Promise<string | undefined> {

@@ -141,7 +141,7 @@ describe("AgentSkills registry", () => {
     ]);
   });
 
-  it("writes Chinese xuanhuan prose Works in the Sankai voice without affecting other Works", async () => {
+  it("writes Chinese xuanhuan prose Works in the Ziling voice without affecting other Works", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-genre-voice-"));
     try {
       const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: "https://example.invalid/v1", apiKey: "fixture", apiFormat: "chat", stream: true, temperature: 0, thinkingBudget: 0 });
@@ -160,18 +160,19 @@ describe("AgentSkills registry", () => {
       };
 
       const xianxia = await writerPrompt({ genre: "传统玄幻修仙/系统爽文" });
-      expect(xianxia.applied).toEqual(["inkos-long-writing", "inkos-sankai-style"]);
-      expect(xianxia.text).toContain("# 三开流玄幻文风");
+      expect(xianxia.applied).toEqual(["inkos-long-writing", "inkos-ziling-style"]);
+      expect(xianxia.text).toContain("# 紫灵风雪流修仙文风");
+      expect(xianxia.text).not.toContain("三开流玄幻文风");
       expect((await writerPrompt({ genre: "xuanhuan", creationKind: "imitation" })).applied)
-        .toEqual(["inkos-long-writing", "inkos-imitation-writing", "inkos-sankai-style"]);
+        .toEqual(["inkos-long-writing", "inkos-imitation-writing", "inkos-ziling-style"]);
 
       for (const other of [
         await writerPrompt({ genre: "都市重生、科技创业、系统流" }),
         await writerPrompt({ genre: "xianxia" }, "en"),
         await writerPrompt({ genre: "玄幻" }, "zh", "interactive-film"),
       ]) {
-        expect(other.applied).not.toContain("inkos-sankai-style");
-        expect(other.text).not.toContain("三开流玄幻文风");
+        expect(other.applied).not.toContain("inkos-ziling-style");
+        expect(other.text).not.toContain("紫灵风雪流修仙文风");
       }
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -6,9 +6,14 @@ import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { Value } from "@sinclair/typebox/value";
 import { ShortRevisionPlanSchema, ShortPackageToolSchema } from "../agents/short-fiction-tool.js";
+import { ReaderSimulatorAgent, type ReaderSimulationInput, type ReaderSimulationResult } from "../agents/reader-simulator.js";
+import { ReviserAgent } from "../agents/reviser.js";
 import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, isAbsolute, relative } from "node:path";
 import type { AgentContext } from "../agents/base.js";
+import { createLLMClient } from "../llm/provider.js";
+import { DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE, resolveAgentModelOverride } from "../llm/model-override.js";
+import { loadProjectConfig } from "../utils/config-loader.js";
 import {
   SHORT_FICTION_DEFAULT_CHAPTERS,
   SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
@@ -41,8 +46,9 @@ import {
 import { loadSecrets } from "../llm/secrets.js";
 import type { Observation } from "../models/observation.js";
 import { ProjectConfigSchema } from "../models/project.js";
+import { BOOK_PLATFORM } from "../models/book.js";
 import { StateManager } from "../state/manager.js";
-import { countChapterLength, resolveLengthCountingMode } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength, resolveLengthCountingMode } from "../utils/length-metrics.js";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath as projectPath } from "../utils/posix-path.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
@@ -52,6 +58,7 @@ import { readArtifactRevision } from "../harness/artifact-reader.js";
 import { loadAvailableAgentSkills } from "../skills/builtin-loader.js";
 import { hydrateActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
+import { readerUnavailableObservation, simulateAndReviseChapter } from "./reader-revision.js";
 
 import { readShortProductionState, writeShortProductionState, shortInputHash, type ShortProductionState } from "./short-production-state.js";
 
@@ -71,6 +78,7 @@ function shortDraftMinimum(options: ShortFictionRunOptions) {
 export interface ShortFictionRunRuntimes {
   readonly planner: AgentContext;
   readonly writer: AgentContext;
+  readonly reader?: AgentContext;
   readonly draftReview: AgentContext;
   readonly package: AgentContext;
 }
@@ -364,6 +372,8 @@ async function produceShort(
     outlineMarkdown = await readFile(safeChildPath(root, join(baseDir, "outline", "v001.md")), "utf8");
   }
   const previousState = await readShortProductionState(root, baseDir);
+  const workManifest = await loadWorkManifest(root, storyId);
+  const workMetadata = workManifest.metadata;
   options={...options,title:workTitle};
   minimum={...minimum,title:workTitle};
   let productionState: ShortProductionState = {
@@ -388,6 +398,8 @@ async function produceShort(
   };
   if (stopAfter === "outline") return stageResult("outline", ["outline/v001.md"]);
   let finalDraft: ShortFictionBatchDraft;
+  const readerRevisionCache = new Map<number, { readonly sourceHash: string; readonly sourceContent: string; readonly finalContent: string }>();
+  let readerRuntimePromise: Promise<AgentContext> | undefined;
   let draftReviewObservations: ReadonlyArray<Observation> = [];
   let draftReviewWarning: string | undefined;
   let packageWarning: string | undefined;
@@ -412,13 +424,108 @@ async function produceShort(
   try {
     options.onProgress?.("Writing full short fiction draft...");
     const writer = new ShortFictionWriterAgent(options.runtimes.writer);
+    const readerRuntime = () => options.runtimes.reader
+      ? Promise.resolve(options.runtimes.reader)
+      : readerRuntimePromise ??= resolveShortReaderRuntime(root, options.runtimes.writer);
     const persistDraftBatch = async (
       draft: ShortFictionBatchDraft,
       completedChapterNumbers: ReadonlyArray<number>,
     ) => {
-      await writeDraftArtifacts(root, baseDir, "v001-partial", draft, language);
+      let persistedDraft = draft;
+      const readerChapters = { ...(productionState.stages.readerSimulation?.chapters ?? {}) };
+      let addedReaderUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      for (const chapterNumber of completedChapterNumbers) {
+        const chapter = persistedDraft.chapters.find((item) => item.number === chapterNumber);
+        if (!chapter?.title.trim() || !chapter.content.trim()) continue;
+        const simulation = shortChapterReaderInput(persistedDraft, chapter, language, workMetadata);
+        const sourceHash = shortInputHash({ simulation, direction: productionState.intent });
+        const saved = readerChapters[String(chapterNumber)];
+        if (saved?.finalHash === sourceHash) continue;
+        if (saved?.sourceHash === sourceHash) {
+          const cached = readerRevisionCache.get(chapterNumber);
+          if (cached?.sourceHash === sourceHash) {
+            persistedDraft = replaceShortChapter(persistedDraft, chapterNumber, chapter.title, cached.finalContent, language);
+            continue;
+          }
+        }
+
+        let pass;
+        try {
+          const reader = new ReaderSimulatorAgent(await readerRuntime());
+          pass = await simulateAndReviseChapter({
+            reader,
+            reviser: new ReviserAgent(options.runtimes.writer),
+            simulation,
+            bookDir: baseDir,
+            contextPackage: {
+              chapter: chapterNumber,
+              selectedContext: [{
+                source: "short-fiction-author-direction",
+                reason: "Preserve the confirmed author intent while applying reader feedback.",
+                excerpt: productionState.intent,
+                protection: "protected",
+              }],
+            },
+            lengthSpec: buildLengthSpec(charsPerChapter, language, {
+              minChapterLength: minimum.minChapterLength,
+              maxChapterLength: options.maxChapterLength,
+            }),
+            signal: options.signal,
+          });
+        } catch (error) {
+          options.signal?.throwIfAborted();
+          const unavailable = readerUnavailableObservation("reader-simulation-unavailable", error, language);
+          pass = {
+            content: chapter.content,
+            summary: unavailable.summary,
+            observations: [unavailable],
+            simulationStatus: "failed" as const,
+            revisionStatus: "not-needed" as const,
+            tokenUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          };
+        }
+        addedReaderUsage = addTokenUsage(addedReaderUsage, pass.tokenUsage);
+        const finalHash = shortInputHash({ simulation: { ...simulation, chapterContent: pass.content }, direction: productionState.intent });
+        readerRevisionCache.set(chapterNumber, { sourceHash, sourceContent: chapter.content, finalContent: pass.content });
+        readerChapters[String(chapterNumber)] = {
+          sourceHash,
+          finalHash,
+          inputSummary: shortReaderInputSummary(simulation),
+          simulationStatus: pass.simulationStatus,
+          revisionStatus: pass.revisionStatus,
+          summary: pass.summary,
+          observations: [...pass.observations],
+          tokenUsage: pass.tokenUsage,
+        };
+        persistedDraft = replaceShortChapter(persistedDraft, chapterNumber, chapter.title, pass.content, language);
+        if (pass.simulationStatus === "failed" || pass.revisionStatus === "failed") {
+          options.onProgress?.(`Reader workflow unavailable for chapter ${chapterNumber}; keeping its current draft.`);
+        }
+      }
+
+      await writeDraftArtifacts(root, baseDir, "v001-partial", persistedDraft, language);
+      const oldReaderStage = productionState.stages.readerSimulation;
+      if (Object.keys(readerChapters).length > 0) {
+        const readerObservations = Object.values(readerChapters).flatMap((item) => item.observations);
+        productionState = {
+          ...productionState,
+          stages: {
+            ...productionState.stages,
+            readerSimulation: {
+              status: Object.values(readerChapters).some((item) => item.simulationStatus === "failed" || item.revisionStatus === "failed") ? "failed" : "completed",
+              inputHash: shortInputHash(Object.fromEntries(Object.entries(readerChapters).map(([number, item]) => [number, item.finalHash]))),
+              updatedAt: new Date().toISOString(),
+              error: Object.values(readerChapters).find((item) => item.simulationStatus === "failed" || item.revisionStatus === "failed")?.summary,
+              observations: readerObservations,
+              tokenUsage: addTokenUsage(oldReaderStage?.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, addedReaderUsage),
+              chapters: readerChapters,
+            },
+          },
+        };
+        await writeShortProductionState(root, baseDir, productionState);
+      }
       await syncWorkSourceArtifacts({ projectRoot: root, workId: storyId, accept: false });
-      const saved=draft.chapters.filter(chapter=>chapter.title.trim()&&chapter.content.trim()).length;
+      const saved=persistedDraft.chapters.filter(chapter=>chapter.title.trim()&&chapter.content.trim()).length;
       options.onProgress?.(language==='en'
         ? `Saved ${saved} candidate chapters; ${completedChapterNumbers.length} currently meet the text and length requirements.`
         : `已保存 ${saved} 章候选正文，${completedChapterNumbers.length} 章已满足篇幅与文本要求。`);
@@ -445,6 +552,7 @@ async function produceShort(
     };
     const candidateDraft=resumedDraft??await writer.writeDraft(draftInput);
     let draftV1=preserveManuscript?candidateDraft:await writer.continueDraft({...draftInput,draft:candidateDraft});
+    draftV1 = reapplyShortReaderRevisions(draftV1, readerRevisionCache, language);
     let missingFromDraft = preserveManuscript ? [] : findIncompleteShortFictionChapters(draftV1, minimum);
     if (missingFromDraft.length > 0) {
       await writeDraftArtifacts(root, baseDir, "v001-partial", draftV1, language);
@@ -1598,4 +1706,79 @@ function safeFileName(value: string): string {
     .trim()
     .slice(0, 80);
   return cleaned || "short-fiction";
+}
+
+async function resolveShortReaderRuntime(root: string, fallback: AgentContext): Promise<AgentContext> {
+  const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
+  const override = config.modelOverrides?.["reader-simulator"] ?? DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE;
+  const resolved = resolveAgentModelOverride({ override, llm: config.llm, projectRoot: root });
+  const client = createLLMClient({ ...(resolved.clientConfig ?? config.llm), model: resolved.model });
+  return { ...fallback, client, model: resolved.model };
+}
+
+function shortChapterReaderInput(
+  draft: ShortFictionBatchDraft,
+  chapter: ShortFictionBatchDraft["chapters"][number],
+  language: ShortFictionLanguage,
+  metadata: Readonly<Record<string, unknown>>,
+): ReaderSimulationInput {
+  const previous = draft.chapters.find((item) => item.number === chapter.number - 1);
+  const previousChapterSummary = previous ? `${previous.title}\n${previous.content}` : "";
+  const genre = typeof metadata.genre === "string" ? metadata.genre.trim() : "";
+  const platform = typeof metadata.platform === "string" ? metadata.platform.trim() : "";
+  return {
+    storyTitle: draft.storyTitle,
+    ...(genre ? { genre } : {}),
+    ...(platform ? { platform } : {}),
+    chapterNumber: chapter.number,
+    chapterTitle: chapter.title,
+    chapterContent: chapter.content,
+    ...(previousChapterSummary ? { previousChapterSummary } : {}),
+    language,
+  };
+}
+
+function replaceShortChapter(
+  draft: ShortFictionBatchDraft,
+  chapterNumber: number,
+  title: string,
+  content: string,
+  language: ShortFictionLanguage,
+): ShortFictionBatchDraft {
+  const chapters = draft.chapters.map((chapter) => chapter.number === chapterNumber
+    ? { ...chapter, title, content, charCount: countChapterLength(content, resolveLengthCountingMode(language)) }
+    : chapter);
+  const updated = { ...draft, chapters, rawContent: "" };
+  return { ...updated, rawContent: renderShortFictionDraftMarkdown(updated, language) };
+}
+
+function shortReaderInputSummary(input: ReaderSimulationInput): string {
+  const { chapterContent, ...context } = input;
+  return JSON.stringify({ ...context, chapterContentHash: shortInputHash(chapterContent) });
+}
+
+function reapplyShortReaderRevisions(
+  draft: ShortFictionBatchDraft,
+  cache: ReadonlyMap<number, { readonly sourceContent: string; readonly finalContent: string }>,
+  language: ShortFictionLanguage,
+): ShortFictionBatchDraft {
+  let result = draft;
+  for (const [chapterNumber, cached] of cache) {
+    const chapter = result.chapters.find((item) => item.number === chapterNumber);
+    if (chapter?.content === cached.sourceContent) {
+      result = replaceShortChapter(result, chapterNumber, chapter.title, cached.finalContent, language);
+    }
+  }
+  return result;
+}
+
+function addTokenUsage(
+  left: ReaderSimulationResult["tokenUsage"],
+  right: ReaderSimulationResult["tokenUsage"],
+): ReaderSimulationResult["tokenUsage"] {
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
 }

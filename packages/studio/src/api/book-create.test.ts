@@ -1,24 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildStudioBookConfig, normalizeStudioPlatform, waitForStudioBookReady } from "./book-create";
-
-describe("normalizeStudioPlatform", () => {
-  it("preserves user platform metadata and defaults an omitted value", () => {
-    expect(normalizeStudioPlatform("tomato")).toBe("tomato");
-    expect(normalizeStudioPlatform("qidian")).toBe("qidian");
-    expect(normalizeStudioPlatform("feilu")).toBe("feilu");
-    expect(normalizeStudioPlatform(undefined)).toBe("other");
-    expect(normalizeStudioPlatform("番茄小说")).toBe("番茄小说");
-    expect(normalizeStudioPlatform("royal-road")).toBe("royal-road");
-  });
-});
+import { buildStudioBookConfig, waitForStudioBookReady } from "./book-create";
 
 describe("buildStudioBookConfig", () => {
-  it("preserves supported platform selections from studio create requests", () => {
+  it("writes every studio-created book for 番茄小说", () => {
     const config = buildStudioBookConfig(
       {
         title: "测试书",
-        genre: "xuanhuan",
-        platform: "qidian",
+        genre: "玄幻/宗门",
         language: "zh",
         chapterWordCount: 2500,
         targetChapters: 120,
@@ -28,26 +16,21 @@ describe("buildStudioBookConfig", () => {
 
     expect(config).toMatchObject({
       title: "测试书",
-      genre: "xuanhuan",
-      platform: "qidian",
+      genre: "玄幻/宗门",
+      platform: "番茄小说",
       language: "zh",
       chapterWordCount: 2500,
       targetChapters: 120,
     });
   });
 
-  it("preserves user-defined platform metadata", () => {
+  it("derives the id from an English title", () => {
     const config = buildStudioBookConfig(
-      {
-        title: "English Book",
-        genre: "other",
-        platform: "royal-road",
-        language: "en",
-      },
+      { title: "English Book", genre: "Fantasy", language: "en" },
       "2026-03-30T00:00:00.000Z",
     );
 
-    expect(config.platform).toBe("royal-road");
+    expect(config.platform).toBe("番茄小说");
     expect(config.language).toBe("en");
     expect(config.id).toBe("english-book");
   });

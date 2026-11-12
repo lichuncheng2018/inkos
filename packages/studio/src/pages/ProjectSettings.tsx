@@ -50,6 +50,33 @@ const DEFAULT_RESEARCH_SEARCH: ResearchSearchDraft = {
   apiKeyEnv: "TAVILY_API_KEY",
 };
 
+const MODEL_ROUTE_AGENTS = [
+  ["writer", "写手"],
+  ["auditor", "审稿员"],
+  ["reviser", "修订员"],
+  ["reader-simulator", "读者模拟器"],
+  ["architect", "设定架构师"],
+  ["radar", "市场雷达"],
+  ["chapter-analyzer", "章节分析器"],
+  ["planner", "规划师"],
+  ["composer", "上下文整理"],
+  ["state-validator", "状态校验员"],
+  ["stateValidator", "状态校验员"],
+  ["fanfic-canon-importer", "原作设定导入"],
+  ["forecast", "剧情预测"],
+  ["film-authoring", "影视创作"],
+  ["short-outline", "短篇大纲"],
+  ["short-writer", "短篇写手"],
+  ["short-draft-review", "短篇审稿"],
+  ["short-package", "短篇包装"],
+  ["short-reviser", "短篇修订"],
+  ["script-creation", "剧本创作"],
+  ["storyboard-creation", "分镜创作"],
+  ["interactive-film-creation", "互动影游创作"],
+  ["play", "互动叙事"],
+  ["translation", "翻译"],
+] as const;
+
 // Smooth open/close via grid-template-rows (same trick as the sidebar).
 function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
   return (
@@ -342,12 +369,20 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           )}
           {overrideRows.map((row, i) => (
             <div key={i} className="flex items-center gap-2">
-              <input
+              <select
                 value={row.agent}
                 onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
-                placeholder={t("settings.agentName")}
-                className={`${fieldClass} flex-1`}
-              />
+                aria-label={t("settings.agentName")}
+                className={`${fieldClass} min-w-0 flex-1`}
+              >
+                <option value="">{t("settings.agentName")}</option>
+                {row.agent && !MODEL_ROUTE_AGENTS.some(([agent]) => agent === row.agent) && (
+                  <option value={row.agent}>{row.agent}</option>
+                )}
+                {MODEL_ROUTE_AGENTS.map(([agent, zhLabel]) => (
+                  <option key={agent} value={agent}>{agent}（{zhLabel}）</option>
+                ))}
+              </select>
               <span className="text-muted-foreground">→</span>
               <input
                 value={row.model}

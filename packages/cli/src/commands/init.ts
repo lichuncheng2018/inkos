@@ -22,9 +22,9 @@ export const initCommand = new Command("init")
       log("");
       const isEnglish = (opts.lang ?? "zh") === "en";
       const exampleCreateLines = isEnglish
-        ? ["  inkos book create --title 'My Novel' --genre progression --platform royalroad --lang en"]
+        ? ["  inkos book create --title 'My Novel' --genre progression --lang en"]
         : [
-          "  inkos book create --title '我的小说' --genre xuanhuan --platform tomato",
+          "  inkos book create --title '我的小说' --genre xuanhuan",
           "  # English project? Re-run with: inkos init --lang en",
         ];
       if (global) {

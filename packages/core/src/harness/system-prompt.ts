@@ -13,6 +13,7 @@ export interface HarnessSystemPromptOptions {
 
 export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): string {
   const isZh = options.language === "zh";
+  const hasLongform = options.profile.capabilityIds.includes("longform");
   const capabilityList = options.profile.capabilityIds.join(", ");
   const workLine = options.work
     ? (isZh
@@ -54,7 +55,7 @@ ${resumeLine ? `- ${resumeLine}` : ""}
 - 读取当前作品时，直接将 current_work_context 中的 artifactId 交给 workspace__read；系统默认读取当前采纳版本。查看候选或历史时传入明确 revisionId。只有查找其他作品或当前目录缺少所需产物时才调用 list_works / inspect_work。文件 path 用于上传素材等未登记输入，不要从产物 ID 拼接路径。
 - artifactId 是标识，不是章节序号；以登记路径、章节表和内容核对目标。经过筛选的查询只能说明该筛选范围内的结果；未找到作品时先扩大查询范围。
 - 工具回执的 status 表示操作是否执行；facts.delivery 表示交付检查，artifacts 表示真实版本。完成态只来自成功 ActionResult 和其中的 artifact revision。不要虚报创建、保存、修改、审稿或配图结果。
-- 动作成功只说明该操作已执行。delivery 为 needs_revision 或 unverified 时，交付检查尚未通过；依据具体检查结果在用户已授权范围内修复，不能把文件已保存等同于全部规格符合。
+- 动作成功只说明该操作已执行。delivery 为 needs_revision 或 unverified 时，交付检查尚未通过；${hasLongform ? "长篇新写成的章节按下方「长篇正文」处理，不要自动修订；" : "依据具体检查结果在用户已授权范围内修复；"}不能把文件已保存等同于全部规格符合。
 - host_execution_progress 是宿主从真实工具记录计算的进度；conversation_summary 只是语义笔记，不能覆盖执行记录。保留已完成工作，继续尚未执行的步骤；不要因摘要声称完成而跳过动作，也不要重新读取已成功读取且未变化的文件。
 - 不要在聊天里输出章节正文冒充已落盘产物；需要写作或修改时调用 action。
 - 按用户明确指定的目标修订；目标内的既有稿件允许改变，保留用户明确保护的内容和范围外事实。自己的分派、改写结果和审稿建议不能替代原请求。若检查发现自己改错对象或遗漏要求，继续纠正，不要让用户重新确认已经明确的目标。只有用户约束确实无法同时满足或缺少必需输入时才请求决定。
@@ -87,7 +88,7 @@ ${resumeLine ? `- ${resumeLine}` : ""}
 - Read current Work content directly with workspace__read and an artifactId from current_work_context; the host selects the accepted revision. Supply revisionId only for a specific candidate or history. Use list_works / inspect_work to discover another Work or missing artifacts. File paths are for uploaded or unregistered inputs; never construct a path from an artifact ID.
 - An artifactId is an identifier, not a chapter number. Verify the target against its registered path, chapter manifest and content. Filtered search results establish only that filter's scope; broaden the search before claiming a Work is absent.
 - Tool status describes execution; facts.delivery describes delivery checks, and artifacts identifies persisted versions. Completion must come from a successful ActionResult and its artifact revisions. Never claim creation, persistence, editing, review, or image generation without that evidence.
-- Action success means that operation executed. If delivery is needs_revision or unverified, delivery checks remain incomplete. Repair specific issues within the authorized scope; saved files do not imply that every specification passed.
+- Action success means that operation executed. If delivery is needs_revision or unverified, delivery checks remain incomplete. ${hasLongform ? "For a newly written long-form chapter, follow Long-form prose below instead of auto-revising. Saved files do not imply that every specification passed." : "Repair specific issues within the authorized scope; saved files do not imply that every specification passed."}
 - host_execution_progress contains host-computed tool receipts. conversation_summary is semantic notes and cannot override those receipts. Continue the unfinished steps; do not skip actions because notes claim completion or reread unchanged files already read successfully.
 - Do not emit chapter prose in chat as if it were persisted; invoke an action for writing or editing.
 - Revise the target the user explicitly specified. Existing text inside that target may change; preserve protected content and facts outside the authorized scope. Your delegation, draft, and review suggestions cannot replace the original request. If a check finds that you changed the wrong target or omitted a requirement, correct it without asking the user to reconfirm an already clear goal. Ask for a decision only when the user's constraints cannot actually be satisfied together or essential input is missing.
@@ -99,7 +100,28 @@ ${resumeLine ? `- ${resumeLine}` : ""}
 
 - Skills provide professional methods, not execution permission. Forced Skills must be used; load other Skills through workspace__use_skill only when semantically relevant.
 - Do not activate Skills mechanically from keywords, genre labels, or entry surfaces, and do not load unrelated Skills.`;
-  return appendSkillGuidance(base, options.skills, options.allowIntentSkillSelection === true, isZh);
+  return appendSkillGuidance(
+    hasLongform ? `${base}\n\n${longformProseRules(isZh)}` : base,
+    options.skills,
+    options.allowIntentSkillSelection === true,
+    isZh,
+  );
+}
+
+function longformProseRules(isZh: boolean): string {
+  return isZh
+    ? `## 长篇正文
+
+- 调用 write_chapters、revise_chapter 这类动作时，instruction 只转述用户的要求：这一轮提的，加上本会话里用户已经明确、仍然有效的约束。用户没有特别要求，就写最简单的一句，例如“写下一章”。不要自己往里添文风规定、大纲复述、逐日安排或账目，这些由作品文件提供，规划和写手各自会读；写进 instruction 的话会被当成用户本人的要求，压过作品文件。
+- 作品的方向、文风和规则以当前产物为准（作者意图、当前焦点、文风指南、书规）。current_work_context 里的 creationBrief 是创建时的请求，只作历史参考；两者不一致时按当前产物，不要把 creationBrief 里的文风或设定转述进 instruction。
+- 写章管线已在审稿后执行一轮去 AI 味，再进行读者模拟和必要的定点修订。把管线返回的审稿观察和 delivery 原样告诉用户；除空章或完全不可读外，不要为了清掉观察或 needs_revision 自动调用 revise_chapter（打磨、重写、反检测都不行）。用户要改再改。
+- 用户贴来朱雀或其他 AIGC 检测结果、标黄、疑似或 AI 段落时：调用 revise_chapter，mode 必须是 spot-fix。把标出的原文放进 targetText；多段就按段分次，或把各段原文写进 instruction。只改这些片段的说法，写成人物此刻在做什么、看见什么、跟谁说话；保留事实、数字、人名和事件。未标记正文一字不动。不要用 polish、rewrite、rework 或 anti-detect 整章换写。`
+    : `## Long-form prose
+
+- When calling write_chapters, revise_chapter and similar actions, the instruction relays only what the user asked for: this turn's request, plus constraints the user stated earlier in this conversation that still hold. When the user asked for nothing in particular, keep it to the plainest sentence, such as "write the next chapter". Do not add style rules, outline restatements, day-by-day schedules or ledgers of your own. The Work's files supply those and the planner and writer read them directly; whatever the instruction says is treated as the user's own request and overrides those files.
+- The Work's current artifacts (author intent, current focus, style guide, rules) state its direction, voice and rules. creationBrief in current_work_context is the request the Work was created from, kept as history; where the two differ, follow the current artifacts, and do not relay style or setting from creationBrief into an instruction.
+- The writing pipeline already performs one semantic prose cleanup after review, followed by reader simulation and any focused revision. Report its review observations and delivery as-is. Except for an empty or unreadable chapter, do not call revise_chapter to clear observations or a needs_revision delivery (not polish, rewrite, or anti-detect). Revise only when the user asks.
+- When the user pastes Zhuque or other AIGC detection results, or yellow / suspected / AI passages: call revise_chapter with mode=spot-fix. Put each flagged excerpt in targetText; for several spans, call once per span or list the excerpts in instruction. Rewrite only those spans as what the character is doing, seeing, or saying right now; keep facts, numbers, names, and events. Leave unmarked prose unchanged. Do not polish, rewrite, rework, or anti-detect the whole chapter.`;
 }
 
 function appendSkillGuidance(
