@@ -1,6 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { ReaderSimulatorAgent } from "../agents/reader-simulator.js";
 import type { AgentContext } from "../agents/base.js";
+import { createLLMClient } from "../llm/provider.js";
+import { fetchWithProxy } from "../utils/proxy-fetch.js";
+
+vi.mock("../utils/proxy-fetch.js", () => ({ fetchWithProxy: vi.fn() }));
 
 it("sends only reader-visible context and requires evidence from the current chapter", async () => {
   const agent = new ReaderSimulatorAgent({
@@ -41,8 +45,57 @@ it("sends only reader-visible context and requires evidence from the current cha
   expect(tool.name).toBe("submit_reader_simulation");
   expect(options).toMatchObject({ professionalGuidance: false, includeAuthorRequest: false });
   expect(messages).toHaveLength(2);
+  expect(messages[0]!.content).toContain('"sourceRefs":[{"sourceId":"chapter-1","startLine":1,"endLine":1}]');
   const userInput = JSON.parse(messages[1]!.content);
   expect(userInput.story).toEqual({ title: "The Receipt", genre: "Mystery", platform: "Fiction app" });
   expect(userInput).not.toHaveProperty("outline");
   expect(userInput).not.toHaveProperty("authorRequest");
+});
+
+it("retries an unusable submission and keeps a cited finding alongside malformed observations", async () => {
+  const model = "fixture";
+  const client = createLLMClient({
+    service: "custom", provider: "openai", configSource: "studio", model, apiKey: "fixture",
+    baseUrl: "https://example.test/v1", apiFormat: "chat", stream: false, thinkingBudget: 0, temperature: 0,
+  });
+  const agent = new ReaderSimulatorAgent({ client, model, projectRoot: "/tmp" });
+  const chapterContent = "她把收据折起来。\n店员还在等。";
+  const unsupported = { code: "unsupported", assessment: "issue", summary: "缺少正文引证。" };
+  const malformed = [unsupported, "只有一句文字的意见"];
+  const supported = {
+    code: "unclear-choice", assessment: "issue", summary: "读者不明白她为什么收起收据。",
+    sourceRefs: [{ sourceId: "chapter-2", startLine: 1, endLine: 1 }],
+  };
+
+  const fetch = vi.mocked(fetchWithProxy);
+  fetch.mockImplementation(async () => {
+    const attempt = fetch.mock.calls.length;
+    return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{
+      id: `reader-${attempt}`, type: "function",
+      function: {
+        name: "submit_reader_simulation",
+        arguments: JSON.stringify({
+          summary: "人物的选择交代得太快。",
+          observations: attempt === 1 ? malformed : [...malformed, supported],
+        }),
+      },
+    }] } }] }));
+  });
+
+  const result = await agent.simulateChapter({
+    storyTitle: "收据", chapterNumber: 2, chapterTitle: "签名", chapterContent, language: "zh",
+  });
+
+  expect(fetch).toHaveBeenCalledTimes(2);
+  const retry = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body));
+  const feedback = retry.messages.find((message: { role: string }) => message.role === "tool");
+  expect(JSON.parse(feedback.content)).toMatchObject({ code: "WORKER_SCHEMA_INVALID", issues: [
+    { path: "/observations/0/sourceRefs", message: "Expected required property" },
+    { path: "/observations/0/sourceRefs", message: "Expected array" },
+    { path: "/observations/1", message: "Expected object" },
+  ] });
+  expect(result.observations).toEqual([{
+    ...supported, code: "reader-unclear-choice", category: "quality", evidence: [],
+    sourceRefs: [{ sourceId: "chapter-2", quote: "她把收据折起来。" }],
+  }]);
 });

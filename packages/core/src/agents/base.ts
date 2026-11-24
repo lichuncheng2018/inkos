@@ -91,7 +91,7 @@ export abstract class BaseAgent {
   protected async submitSourcedReview(
     messages: ReadonlyArray<LLMMessage>,
     sources: ReadonlyMap<string, string>,
-    tool: { name: string; label: string; description: string },
+    tool: Pick<WorkerResultTool<typeof SourcedReviewIndexToolSchema>, "name" | "label" | "description" | "normalize">,
     options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void; professionalGuidance?: boolean; includeAuthorRequest?: boolean },
   ) {
     const { categoryRequired, validateObservations, professionalGuidance, includeAuthorRequest, ...generationOptions } = options;
