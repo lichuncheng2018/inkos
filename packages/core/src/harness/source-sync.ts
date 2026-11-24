@@ -74,6 +74,8 @@ export async function syncWorkSourceArtifacts(input: {
   readonly episodeId?: string;
   readonly updatedAt?: string;
   readonly writes?: ReadonlyArray<AtomicFileWrite>;
+  /** Project-relative source files or directories to remove with their registered revisions. */
+  readonly deletes?: ReadonlyArray<string>;
   readonly title?: string;
   readonly lineage?: WorkManifest["lineage"];
   readonly status?: WorkManifest["status"];
@@ -81,20 +83,39 @@ export async function syncWorkSourceArtifacts(input: {
   const manifest = await loadWorkManifest(input.projectRoot, input.workId);
   const root = workDirectory(input.projectRoot, input.workId);
   const sourceRoot = join(root, "source");
+  const sourcePath = (projectPath: string): string => {
+    const path = toPosixPath(relative(join("works", input.workId, "source"), projectPath));
+    if (!path || path.startsWith("../") || path === ".." || path.startsWith("/")) {
+      throw new Error("Artifact changes must remain inside Work source");
+    }
+    return path;
+  };
+  const deleted = (input.deletes ?? []).map(sourcePath);
+  const isDeleted = (path: string) => deleted.some((entry) => path === entry || path.startsWith(`${entry}/`));
   const pending = new Map<string, AtomicFileWrite>();
   for (const write of input.writes ?? []) {
-    const path = toPosixPath(relative(join("works", input.workId, "source"), write.relativePath));
-    if (path.startsWith("../") || path === ".." || path.startsWith("/")) throw new Error("Artifact write must remain inside Work source");
-    pending.set(path, write);
+    pending.set(sourcePath(write.relativePath), write);
   }
   // An explicit write set owns its own revisions, not every candidate in the Work.
   const acceptPaths = (input.acceptPaths ?? (input.writes
     ? [...pending.keys()].map(path => toPosixPath(join("source", path)))
     : undefined))?.map(toPosixPath);
-  const files = [...new Set([...(await listFiles(sourceRoot)), ...pending.keys()])].sort();
+  const files = [...new Set([...(await listFiles(sourceRoot)), ...pending.keys()])]
+    .filter((path) => !isChapterTrashPath(path) && !isDeleted(path))
+    .sort();
   const presentWorkPaths = new Set(files.map((file) => toPosixPath(join("source", file))));
   const updatedAt = input.updatedAt ?? new Date().toISOString();
-  const artifacts = [...manifest.artifacts];
+  const snapshotDeletes = new Set<string>();
+  const artifacts = manifest.artifacts.filter((artifact) => {
+    if (!artifact.revisions.length || !artifact.revisions.every(({ path }) => path.startsWith("source/") && isDeleted(path.slice("source/".length)))) {
+      return true;
+    }
+    for (const revision of artifact.revisions) {
+      const ownedSnapshot = revisionSnapshotPath(artifact.id, revision.id, revision.path);
+      if (revision.snapshotPath === ownedSnapshot) snapshotDeletes.add(join("works", input.workId, ownedSnapshot));
+    }
+    return false;
+  });
   const snapshotWrites: AtomicFileWrite[] = [];
 
   for (const file of files) {
@@ -200,7 +221,10 @@ export async function syncWorkSourceArtifacts(input: {
   for (let index = 0; index < artifacts.length; index += 1) {
     const artifact = artifacts[index]!;
     const current = artifact.revisions.find((revision) => revision.id === artifact.currentRevisionId);
-    if (!input.accept || !current?.path.startsWith("source/") || (acceptPaths && !acceptPaths.includes(current.path)) || presentWorkPaths.has(current.path)) continue;
+    if (!current?.path.startsWith("source/") || presentWorkPaths.has(current.path)) continue;
+    const path = current.path.slice("source/".length);
+    const explicitlyRemoved = isDeleted(path) || isChapterTrashPath(path);
+    if (!explicitlyRemoved && (!input.accept || (acceptPaths && !acceptPaths.includes(current.path)))) continue;
     artifacts[index] = ArtifactManifestSchema.parse({
       ...artifact,
       currentRevisionId: null,
@@ -223,6 +247,7 @@ export async function syncWorkSourceArtifacts(input: {
   });
   await commitAtomicFileSet({
     rootDir: input.projectRoot,
+    deletes: [...(input.deletes ?? []), ...snapshotDeletes],
     writes: [
       ...(input.writes ?? []),
       ...snapshotWrites,
@@ -285,14 +310,20 @@ async function listFiles(root: string): Promise<string[]> {
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       if (entry.name === ".write.lock" || entry.name.endsWith(".db-wal") || entry.name.endsWith(".db-shm") || entry.name.endsWith(".sqlite-wal") || entry.name.endsWith(".sqlite-shm")) continue;
       const path = join(directory, entry.name);
+      const sourcePath = toPosixPath(relative(root, path));
+      if (isChapterTrashPath(sourcePath)) continue;
       if ((await lstat(path)).isSymbolicLink()) continue;
       if (entry.isDirectory()) await visit(path);
       // Discovery and pending writes must share one key before deduplication.
-      else if (entry.isFile()) files.push(toPosixPath(relative(root, path)));
+      else if (entry.isFile()) files.push(sourcePath);
     }
   };
   await visit(root);
   return files;
+}
+
+function isChapterTrashPath(path: string): boolean {
+  return path === "chapters/.trash" || path.startsWith("chapters/.trash/");
 }
 
 async function readArtifactBytes(path: string): Promise<Buffer> {

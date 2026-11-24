@@ -14,7 +14,8 @@ import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
 import { ComposerAgent, type ComposeChapterOutput } from "../agents/composer.js";
 import { WriterAgent, type WriteChapterInput, type WriteChapterOutput } from "../agents/writer.js";
-import { ContinuityAuditor } from "../agents/continuity.js";
+import { ContinuityAuditor, PROCEDURE_DISPLACES_SCENE } from "../agents/continuity.js";
+import { ChapterPlanReviewerAgent } from "../agents/chapter-plan-reviewer.js";
 import { ReaderSimulatorAgent } from "../agents/reader-simulator.js";
 import { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseMode } from "../agents/reviser.js";
 import { StateValidatorAgent, type ValidationResult } from "../agents/state-validator.js";
@@ -387,8 +388,11 @@ export class PipelineRunner {
 
 
   private resolveOverride(agentName: string): { model: string; client: LLMClient } {
-    const override = this.config.modelOverrides?.[agentName]
-      ?? (agentName === "reader-simulator" ? DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE : undefined);
+    const overrides = this.config.modelOverrides;
+    const override = overrides?.[agentName]
+      ?? (agentName === "reader-simulator" || agentName === "chapter-plan-reviewer"
+        ? overrides?.["reader-simulator"] ?? DEFAULT_READER_SIMULATOR_MODEL_OVERRIDE
+        : undefined);
     if (!override) {
       return { model: this.config.model, client: this.config.client };
     }
@@ -1375,22 +1379,38 @@ export class PipelineRunner {
       const skill = available.skills.find((candidate) => candidate.id === "inkos-story-deslop");
       if (!skill) throw new Error("Required skill unavailable: inkos-story-deslop");
       const context = this.agentCtxFor("reviser", bookId);
+      const chapterSourceId = `chapter-${chapterNumber}`;
+      const sceneIssues = auditResult.observations.flatMap((observation) => {
+        if (observation.code !== PROCEDURE_DISPLACES_SCENE || observation.assessment !== "issue") return [];
+        const evidence = observation.sourceRefs?.filter((ref) => ref.sourceId === chapterSourceId).map((ref) => ref.quote);
+        return evidence?.length ? [{ ...observation, evidence }] : [];
+      });
+      const citedSpans = [...new Set(sceneIssues.flatMap((issue) => issue.evidence))];
+      const span = citedSpans.length === 1 ? citedSpans[0] : undefined;
+      const spanStart = span ? finalContent.indexOf(span) : -1;
+      const targetText = span && spanStart >= 0 && finalContent.indexOf(span, spanStart + 1) < 0 ? span : undefined;
+      const cleanupInstruction = this.localize(pipelineLang, {
+        zh: "按 inkos-story-deslop 执行一轮语义去 AI 味。只改正文表达，保留标题、事件、时序、事实、视角、人物声音、姓名、数值和后果；不借机修复审稿中的剧情问题，不新增场景。不要声称已通过外部检测或分数提高。",
+        en: "Perform one semantic prose cleanup using inkos-story-deslop. Change expression only; preserve the title, events, chronology, facts, viewpoint, character voice, names, numbers and consequences. Do not repair plot issues from review or add scenes. Do not claim external detection or a score improvement.",
+      });
+      const sceneInstruction = sceneIssues.length ? this.localize(pipelineLang, {
+        zh: "只处理观察引用的流程段，保留其他段落原文。让决定局面的动作、条件和回应留在场上；不影响当下决定、也不需要在此揭示的备查事实保持为真即可，不必再说出来。不要逐句换词，也不要为了补回删掉的字数另加解释。",
+        en: "Change only the cited procedural passages and keep the rest verbatim. Keep the action, terms and response that drive the decision. Facts that do not affect the decision and need not be revealed here may remain true without being restated. Do not paraphrase line by line or pad to replace deleted explanation.",
+      }) : "";
       const deslop = await new ReviserAgent({
         ...context,
         activatedSkills: mergeActivatedSkillGuidance(context.activatedSkills ?? [], [{ skill, resources: [] }]),
-      }).reviseChapter(bookDir, finalContent, chapterNumber, [], "anti-detect", book.genre, {
+      }).reviseChapter(bookDir, finalContent, chapterNumber, sceneIssues, sceneIssues.length ? "spot-fix" : "anti-detect", book.genre, {
         language: pipelineLang,
         chapterTitle: output.title,
+        ...(targetText !== undefined ? { targetText } : {}),
         contextPackage: {
           ...reducedControlInput.contextPackage,
           selectedContext: [...reducedControlInput.contextPackage.selectedContext, {
             source: "pipeline:semantic-prose-cleanup",
             reason: "Post-review semantic prose cleanup",
             protection: "protected",
-            excerpt: this.localize(pipelineLang, {
-              zh: "按 inkos-story-deslop 执行一轮语义去 AI 味。只改正文表达，保留标题、事件、时序、事实、视角、人物声音、姓名、数值和后果；不借机修复审稿中的剧情问题，不新增场景。不要声称已通过外部检测或分数提高。",
-              en: "Perform one semantic prose cleanup using inkos-story-deslop. Change expression only; preserve the title, events, chronology, facts, viewpoint, character voice, names, numbers and consequences. Do not repair plot issues from review or add scenes. Do not claim external detection or a score improvement.",
-            }),
+            excerpt: [cleanupInstruction, sceneInstruction].filter(Boolean).join("\n"),
           }],
         },
         lengthSpec,
@@ -2279,21 +2299,25 @@ export class PipelineRunner {
       readonly reuseExistingIntentWhenContextMissing?: boolean;
     },
   ): Promise<PlanChapterOutput> {
-    if (
-      options?.reuseExistingIntentWhenContextMissing &&
-      (!externalContext || externalContext.trim().length === 0)
-    ) {
-      const persisted = await loadPersistedPlan(bookDir, chapterNumber);
-      if (persisted) return persisted;
-    }
+    const persisted = options?.reuseExistingIntentWhenContextMissing && !externalContext?.trim()
+      ? await loadPersistedPlan(bookDir, chapterNumber)
+      : null;
+    if (persisted?.readerReviewed) return persisted;
 
-    await this.ensureTextureBank(book, bookDir);
+    if (!persisted) await this.ensureTextureBank(book, bookDir);
     const planner = new PlannerAgent(this.agentCtxFor("planner", book.id));
     const plan = await planner.planChapter({
       book,
       bookDir,
       chapterNumber,
       externalContext,
+      existingPlan: persisted ?? undefined,
+      reviewMemo: (memo, previousEnding) => {
+        this.throwIfOperationAborted();
+        this.logStage(book.language, { zh: "读者盲审章策", en: "reviewing the chapter plan as a reader" });
+        return new ChapterPlanReviewerAgent(this.agentCtxFor("chapter-plan-reviewer", book.id))
+          .reviewPlan({ book, memo, previousEnding });
+      },
     });
     // Persist in the new memo format so subsequent compose/write phases can
     // skip the planner LLM call when no new context is supplied.

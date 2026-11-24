@@ -423,7 +423,8 @@ async function produceShort(
   }
   try {
     options.onProgress?.("Writing full short fiction draft...");
-    const writer = new ShortFictionWriterAgent(options.runtimes.writer);
+    const writerContext = { ...options.runtimes.writer, projectRoot: root, bookId: storyId };
+    const writer = new ShortFictionWriterAgent(writerContext);
     const readerRuntime = () => options.runtimes.reader
       ? Promise.resolve(options.runtimes.reader)
       : readerRuntimePromise ??= resolveShortReaderRuntime(root, options.runtimes.writer);
@@ -454,7 +455,7 @@ async function produceShort(
           const reader = new ReaderSimulatorAgent(await readerRuntime());
           pass = await simulateAndReviseChapter({
             reader,
-            reviser: new ReviserAgent(options.runtimes.writer),
+            reviser: new ReviserAgent(writerContext),
             simulation,
             bookDir: baseDir,
             contextPackage: {
@@ -590,7 +591,7 @@ async function produceShort(
     const inputHash = shortInputHash({ draft: draftV1, outline: outlineMarkdown, intent: productionState.intent });
     if (stopAfter !== "package") {
     options.onProgress?.("Reviewing completed short fiction...");
-    const draftReviewer = new ShortFictionDraftReviewerAgent(options.runtimes.draftReview);
+    const draftReviewer = new ShortFictionDraftReviewerAgent({ ...options.runtimes.draftReview, projectRoot: root, bookId: storyId });
     const requestHash = shortReviewRequestHash({...options, chapterCount, charsPerChapter, language});
     try {
       const cachedReview = productionState.stages.review;
@@ -832,7 +833,8 @@ async function reviseShortFictionWithLock(options: ShortFictionRunOptions & { re
     ...(savedText && options.restartPendingRevision ? [textWrite(join(".inkos", "short-revisions", "archive", `${randomUUID()}.json`), savedText)] : []),
     textWrite(checkpointPath, JSON.stringify(checkpoint, null, 2)),
   ] });
-  const revised = checkpoint.finalization?.result ?? await new ShortFictionWriterAgent(options.runtimes.writer).reviseDraft({
+  const writerContext = { ...options.runtimes.writer, projectRoot: options.projectRoot, bookId: work.id };
+  const revised = checkpoint.finalization?.result ?? await new ShortFictionWriterAgent(writerContext).reviseDraft({
     direction:options.direction,language,chapterCount,
     charsPerChapter: revisionOptions.charsPerChapter ?? (language==="en"?SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER:SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER),
     minChapterLength:minimum.minChapterLength,maxChapterLength:minimum.maxChapterLength,openingHookChars:minimum.openingHookChars,draft,chapterNumbers,

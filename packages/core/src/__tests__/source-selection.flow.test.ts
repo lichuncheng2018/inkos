@@ -65,7 +65,7 @@ it('keeps the complete source corpus without a model dependency when it fits, an
     await state.saveChapterIndex(book.id,[]);
     await writeFile(join(bookDir,'story/book_rules.md'),'# Rules\nPreserve established facts.\n');
     await writeFile(join(bookDir,'story/book_rules.json'),JSON.stringify({version:'2',prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]}));
-    await savePersistedPlan(bookDir,{...plan,intent:{chapter:1,goal},memo:{chapter:1,goal,body:goal,threadRefs:[]}});
+    await savePersistedPlan(bookDir,{...plan,intent:{chapter:1,goal},memo:{chapter:1,goal,body:goal,threadRefs:[]},readerReviewed:true});
     // Stop at the external writing boundary; the real pipeline must persist and
     // deliver the complete governed context without another selection call.
     const writer=vi.spyOn(WriterAgent.prototype,'writeChapter').mockRejectedValue(Object.assign(new Error('Writing boundary reached'),{code:'WRITER_BOUNDARY'}));

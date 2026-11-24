@@ -45,7 +45,7 @@ describe("long-form harness mini-flow", () => {
     await createInitialRuntimeState({bookDir,language:'en'});
     await state.saveChapterIndex(id,[]);
     await mkdir(join(bookDir,'story/runtime'),{recursive:true});
-    for(const chapter of [1,2])await savePersistedPlan(bookDir,{intent:{chapter,goal:'Continue the departure.'},memo:{chapter,goal:'Continue the departure.',body:'Continue the departure.',threadRefs:[]},intentMarkdown:'Continue the departure.',runtimePath:`runtime/chapter-${chapter}.intent.md`,plannerInputs:[]});
+    for(const chapter of [1,2])await savePersistedPlan(bookDir,{intent:{chapter,goal:'Continue the departure.'},memo:{chapter,goal:'Continue the departure.',body:'Continue the departure.',threadRefs:[]},intentMarkdown:'Continue the departure.',runtimePath:`runtime/chapter-${chapter}.intent.md`,plannerInputs:[],readerReviewed:true});
     const staged=await syncWorkSourceArtifacts({projectRoot:root,workId:id,accept:false,writes:[{relativePath:`works/${id}/source/notes.md`,content:'An unrelated candidate.'}]});
     const note=staged.artifacts.find(a=>a.revisions.some(r=>r.path==='source/notes.md'))!;
     // Only model decisions are fixtures; chapter persistence, state, batch

@@ -4,7 +4,7 @@
 
 Establish the active story pressure before background explanation takes over. The first mobile screen needs a concrete disturbance, contradiction, risk, or unanswered fact that makes the next sentence necessary. The pressure can sit inside a place that is already busy: people with their own errands may be on stage without serving that pressure.
 
-In chapter two, demonstrate the protagonist's unusual leverage, information, constraint, or capability through a visible use and consequence rather than explanation. By chapter three, make the next short-term objective legible through action. These are craft defaults for commercial serial openings, not authority over a user's chosen literary pace or form.
+Let the book's premise and the author's chosen pace determine when the protagonist's distinctive leverage, information, or capability first affects an immediate situation. Show the use and its consequence in the first chapter when the author asks for it or when it is the strongest way into the story. Pick the opening moment that puts that experience in play. When a result creates the next short-term objective, let the reader see that connection through a character's action or decision.
 
 ## Keep promises visible
 

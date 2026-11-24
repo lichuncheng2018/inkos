@@ -5,7 +5,7 @@ import { guardedPiNonStreaming } from "../agent/pi-stream.js";
 import { createLLMClient } from "../llm/provider.js";
 import { ShortFictionOutlineAgent, ShortFictionWriterAgent, ShortFictionDraftReviewerAgent } from "../agents/short-fiction.js";
 import {createShortFictionRunTool,createShortFictionReviseTool} from "../agent/agent-tools.js";
-import {runShortFictionStage} from "../pipeline/short-fiction-runner.js";
+import {runShortFictionProduction,runShortFictionStage} from "../pipeline/short-fiction-runner.js";
 import {actionResultFacts,actionFailureFacts} from "../harness/action-observation.js";
 import {ArchitectAgent} from '../agents/architect.js';
 import {ReviserAgent} from '../agents/reviser.js';
@@ -99,11 +99,20 @@ describe("guardedPiNonStreaming", () => {
       const calls:string[]=[];
       fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
         const body=JSON.parse(String(init.body)),name=body.tools?.[0]?.function?.name??"plain_text";calls.push(name);
-        if(name==="plain_text")return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:"Chapter 1: Return\n\nMara returns the sealed receipt. The owner checks the seal and accepts it."}}]}));
+        if(name==="plain_text"){
+          const prompt=body.messages.findLast((message:{role:string})=>message.role==="user").content as string;
+          const [reference, task] = prompt.split("## Chapter writing task");
+          expect(reference).toContain("Continuity notes (check only)");
+          expect(reference).toContain("The safe contains three receipts.");
+          expect(reference).toContain("Mara retains the sealed receipt");
+          expect(task).toContain("The owner checks the seal before accepting the receipt.");
+          expect(task).not.toContain("The safe contains three receipts.");
+          return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{role:"assistant",content:"Chapter 1: Return\n\nMara returns the sealed receipt. The owner checks the seal and accepts it."}}]}));
+        }
         const args={factOps:{upsert:[]},hookOps:{upsert:[],resolve:[]},chapterSummary:{title:"Return",characters:"Mara",events:"Receipt returned",stateChanges:"Receipt returned.",hookActivity:"",mood:"calm",chapterType:"resolution"}};
         return new Response(JSON.stringify({choices:[{finish_reason:"tool_calls",message:{tool_calls:[{id:name,type:"function",function:{name,arguments:JSON.stringify(args)}}]}}]}));
       });
-      const chapter=await new WriterAgent({client:boundedClient,model:model.id,projectRoot:root,bookId:"generic"}).writeChapter({book:JSON.parse(original),bookDir:join(root,"works/generic/source"),chapterNumber:1,chapterIntent:"Return the receipt",chapterMemo:{chapter:1,goal:"Return the receipt",body:"The owner accepts the sealed receipt.",threadRefs:[]},contextPackage:{chapter:1,selectedContext:[{source:"story/parent_canon.md",reason:"Original ownership",excerpt:canon,protection:"protected"}]}});
+      const chapter=await new WriterAgent({client:boundedClient,model:model.id,projectRoot:root,bookId:"generic"}).writeChapter({book:JSON.parse(original),bookDir:join(root,"works/generic/source"),chapterNumber:1,chapterIntent:"Return the receipt",chapterMemo:{chapter:1,goal:"Return the receipt",body:"## Scenes\nThe owner checks the seal before accepting the receipt.\n## Notes\nThe safe contains three receipts.",threadRefs:[]},contextPackage:{chapter:1,selectedContext:[{source:"story/parent_canon.md",reason:"Original ownership",excerpt:canon,protection:"protected"}]}});
       expect(chapter.chapterNumber).toBe(1);
       expect(chapter.title).toBe("Return");
       expect(chapter.content).toBe("Mara returns the sealed receipt. The owner checks the seal and accepts it.");
@@ -143,6 +152,39 @@ describe("guardedPiNonStreaming", () => {
       expect((await readTranscriptEvents(root,'world-session')).filter(e=>e.type==='request_committed')).toHaveLength(2);
     }finally{evictAgentCache('world-session');await rm(root,{recursive:true,force:true});}
   });
+  it("injects the default Chinese voice when drafting and reviewing a standalone short story", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-short-voice-"));
+    const prompts = new Map<string, string>();
+    const title = "迟到";
+    const replies: Record<string, object> = {
+      submit_short_outline: { storyTitle: title, planMarkdown: "小吴快迟到了。", chapter_1_plan: "他等到电梯，上班去了。" },
+      submit_short_chapter: { storyTitle: title, number: 1, title: "电梯", content: "电梯停在十二楼。小吴看了眼时间，今天的全勤奖可以下班了。" },
+      submit_reader_simulation: { summary: "已读。", observations: [] },
+      submit_short_fiction_review: { summary: "已审。", observations: [] },
+      submit_short_package: { title, intro: "小吴上班快迟到了。", sellingPoints: ["一次迟到"], coverPrompt: "小吴站在电梯门口。" },
+    };
+    fetchWithProxyMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      const name = body.tools[0].function.name;
+      prompts.set(name, JSON.stringify(body.messages));
+      if (!replies[name]) throw new Error("Unexpected tool: " + name);
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [
+        { id: name, type: "function", function: { name, arguments: JSON.stringify(replies[name]) } },
+      ] } }] }));
+    });
+    const client = createLLMClient({ provider: "openai", service: "custom", configSource: "studio", baseUrl: model.baseUrl, model: model.id, apiKey: "fixture", apiFormat: "chat", stream: false, temperature: 0, thinkingBudget: 0 });
+    const runtime = { client, model: model.id, projectRoot: root };
+    try {
+      await runShortFictionProduction({ projectRoot: root, storyId: "late", title, direction: "小吴上班快迟到了。", language: "zh", chapterCount: 1, charsPerChapter: 28, minChapterLength: 1, cover: false,
+        runtimes: { planner: runtime, writer: runtime, reader: runtime, draftReview: runtime, package: runtime } });
+      expect(prompts.get("submit_short_chapter")).toContain("遥遥领先");
+      expect(prompts.get("submit_short_fiction_review")).toContain("查的是梗从谁嘴里出来");
+      expect(prompts.get("submit_short_outline")).not.toContain("inkos-plainspoken-style");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('preserves candidate chapters and repairs only failing components before measured delivery',async()=>{
     const root=await mkdtemp(join(tmpdir(),'inkos-short-contract-')),calls:Record<string,number>={};
     let allowRepair=false;
@@ -236,6 +278,9 @@ describe("guardedPiNonStreaming", () => {
       const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;names.push(name);
       let args;
       if(name==='submit_chapter_review'){
+        const system=body.messages.filter((message:{role:string})=>message.role==='system').map((message:{content:string})=>message.content).join('\n');
+        expect(system).toContain('procedure-displaces-scene');
+        expect(system).toContain('cite the continuous span');
         const input=JSON.parse(body.messages.findLast((message:{role:string})=>message.role==='user').content);
         expect(input.chapterNumber).toBe(3);
         const context=input.sources.find((source:{sourceId:string})=>source.sourceId==='governed-context');
@@ -339,13 +384,20 @@ describe("guardedPiNonStreaming", () => {
     for(const items of ['[{"name":"bad " quote"}]','{"name":"Mara"}','[{"name":7}]'])expect(decodeStructuredFields(schema,{items,text:''})).toEqual({items,text:''});
     expect(typeof original.items).toBe('string');
   });
-  it('assembles indexed character documents while preserving quoted character prose',async()=>{
+  it.each([
+    ['en', 'Fanqie-style fast pacing', 'Check the first beat', 'first visible payoff'],
+    ['zh', '番茄爽文节奏', '检查首拍', '第一次看得见的兑现'],
+  ] as const)('sends the default volume pacing to the outline tool and assembles character documents (%s)',async(language,pacing,opening,payoff)=>{
     const card='An adult clerk says "Wait."\nThe witness keeps the original receipt.';
     const called:string[]=[];
     const outlineTokens:number[]=[];
+    const outlinePrompts:string[]=[];
     fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
       const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;called.push(name);
-      if(name==='submit_foundation_outline')outlineTokens.push(body.max_tokens);
+      if(name==='submit_foundation_outline'){
+        outlineTokens.push(body.max_tokens);
+        outlinePrompts.push(...body.messages.filter((message:{role:string})=>message.role==='system').map((message:{content:string})=>message.content));
+      }
       const args=name==='submit_foundation_outline'?{storyFrame:'Evidence conflict',volumeMap:'One resolved chapter'}:
         name==='submit_foundation_details'?{bookRules:'Keep the receipt',bookRulesData:{prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]},pendingHooks:[]}:
         name==='submit_foundation_cast_index'?{roles:[{tier:'major',name:'Mara'},{tier:'minor',name:'Witness'}]}:
@@ -353,9 +405,12 @@ describe("guardedPiNonStreaming", () => {
       return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:name,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}));
     });
     const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
-    const result=await new ArchitectAgent({client,model:model.id,projectRoot:'/tmp'}).generateFoundation({id:'fixture',title:'Receipt',genre:'other',platform:'other',language:'en',status:'outlining',targetChapters:1,chapterWordCount:300,createdAt:'2026-01-01',updatedAt:'2026-01-01'});
+    const result=await new ArchitectAgent({client,model:model.id,projectRoot:'/tmp'}).generateFoundation({id:'fixture',title:'Receipt',genre:'other',platform:'other',language,status:'outlining',targetChapters:1,chapterWordCount:300,createdAt:'2026-01-01',updatedAt:'2026-01-01'});
     expect(called).toEqual(['submit_foundation_outline','submit_foundation_details','submit_foundation_cast_index','submit_foundation_cast_documents']);
     expect(outlineTokens).toEqual([client.defaults.maxTokens]);
+    expect(outlinePrompts.join('\n')).toContain(pacing);
+    expect(outlinePrompts.join('\n')).toContain(opening);
+    expect(outlinePrompts.join('\n')).toContain(payoff);
     expect(result.roles).toEqual([{tier:'major',name:'Mara',content:card},{tier:'minor',name:'Witness',content:'Knows who signed the receipt.'}]);
   });
   it('preserves improving candidates without accepting them and completes only the invalid chapter',async()=>{

@@ -83,6 +83,31 @@ describe("resolveAgentModelOverride", () => {
     expect(resolved.cacheKey).toContain("anthropic");
   });
 
+  it("uses the selected service credentials even when both configurations share the endpoint and model", () => {
+    const selectedService = "custom:备用账号";
+    const resolved = resolveAgentModelOverride({
+      override: { service: selectedService, model: llm.model },
+      llm: {
+        ...llm,
+        services: [...(llm.services ?? []), {
+          service: "custom", name: "备用账号", baseUrl: llm.baseUrl,
+          models: [llm.model], apiFormat: "chat", stream: true,
+        }],
+      },
+      projectRoot: "/tmp",
+      getApiKey: (service) => service === selectedService ? "selected-key" : null,
+    });
+    expect(resolved.reuseDefaultClient).toBe(false);
+    expect(resolved.clientConfig).toMatchObject({ service: selectedService, baseUrl: llm.baseUrl, apiKey: "selected-key", model: llm.model });
+  });
+
+  it("fails for a removed explicit configuration instead of taking a matching model's endpoint", () => {
+    expect(() => resolveAgentModelOverride({
+      override: { service: "custom:已移除", model: llm.model }, llm, projectRoot: "/tmp",
+      getApiKey: () => "removed-key",
+    })).toThrow(/custom:已移除/);
+  });
+
   it("does not reuse a DeepSeek client for Sonnet on a different protocol", () => {
     const resolved = resolveAgentModelOverride({
       override: "claude-sonnet-5-5",

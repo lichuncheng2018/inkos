@@ -40,9 +40,15 @@ export class ReaderSimulatorAgent extends BaseAgent {
       sourceRefs: [{ sourceId, startLine: 1, endLine: 1 }],
     });
     const systemPrompt = isEnglish
-      ? `Simulate one target-platform reader encountering this chapter after the supplied previous-chapter context. You know only the story title, genre, platform, prior chapter context, and this chapter. Do not use or infer from outlines, future events, private canon, author requests, or information a reader has not seen. Judge only comprehension, pacing, emotional engagement, chapter payoff, and the ending hook. Return only concrete, actionable issues supported by the current chapter. Do not invent canon, demand changes based only on taste, rewrite prose, or cite the previous chapter. Every issue must cite exact numbered lines from the current chapter and explain its effect on this reader.
+      ? `Simulate one target-platform reader encountering this chapter after the supplied previous-chapter context. You know only the story title, genre, platform, prior chapter context, and this chapter. Do not infer outlines, future events, private canon, or author requests.
+First identify what the chapter makes the reader wait for and the first line where the reader can see the result. Check whether the chapter gives the decisive moment, the character's response and the changed situation enough room. If procedure or backstory delays it, cite the stretch to compress. When a result is only announced, point to where the reader could see its effect. Quiet chapters can deliver a small but felt change.
+For repeated stakes, explanations or summaries, cite both the first telling and the repetition and say which lines can be condensed or cut. A later detail can earn its place by affecting a choice, revealing pressure or changing how the result feels.
+Prioritize major pacing and payoff issues over small wording fixes. Also consider comprehension, emotional engagement and the ending. Return only actionable issues with exact lines from the current chapter and their effect on this reader. Do not invent canon, demand changes based on taste, rewrite prose, or cite the previous chapter.
 Every entry in observations must be an object like ${observationExample}. Replace the example line numbers with the actual inclusive ranges from this chapter. Include at least one range per issue. Omit any issue you cannot cite. If none remain, submit observations as [].`
-      : `模拟一位符合题材和平台的目标读者，在读过前章内容后阅读本章。你只知道书名、题材、平台、前章内容和当前章节。不要使用或推测大纲、后续事件、未向读者公开的设定、作者要求或其他读者尚未看到的信息。只评估理解是否顺畅、节奏、情绪投入、本章回报和结尾吸引力。只提出当前正文能够支持且可以执行的具体问题，不要臆造设定，不要把个人口味当作缺陷，也不要直接改写正文或引用前章。每条问题都必须引用当前章节的准确行号，并说明它对读者体验的影响。
+      : `模拟一位符合题材和平台的目标读者。你只知道书名、题材、平台、前章内容和当前章节。不要推测大纲、后续事件、未公开的设定或作者要求。
+先找本章让读者等着看什么，以及读者在哪一行第一次亲眼看到结果。检查关键一幕、人物当场反应和局势的变化各有没有写到位。如果流程或补叙把兑现拖晚了，指出可以缩短的连续行段。如果结果只靠转述交代，指出哪一幕可以让读者看到它造成的变化。舒缓章也可以兑现一个能感受到的小变化。
+同一利害、解释或结论讲多遍时，同时引用首次出现和重复的行号，说清哪段可以合并或删减。有些细节会改变选择、显出压力或让结果更有分量，评估时要保留它的作用。
+优先报实质的节奏和兑现问题，再看理解、情绪投入和章尾吸引力。每条只报有本章准确行号依据、能执行的改动和它对读者的影响。不要编设定、拿个人口味当缺陷、直接改写正文或引用前章。
 observations 中每条都必须是形如 ${observationExample} 的对象。用本章的实际起止行号替换示例行号，每条至少引用一个范围。省略无法引证的问题，没有可提交的问题时将 observations 设为 []。`;
     const userPrompt = JSON.stringify({
       story: {

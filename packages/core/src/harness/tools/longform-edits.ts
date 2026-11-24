@@ -49,7 +49,11 @@ function textResult<T>(text: string, details: T): AgentToolResult<T> {
 const WriteTruthFileParams = Type.Object({
   bookId: Type.Optional(Type.String({ description: "Work ID. Omit to use the active Work." })),
   fileName: Type.String({ description: "Truth file path relative to story/, such as current_focus.md, outline/volume_map.md or roles/主要角色/<name>.md." }),
-  content: Type.String({ description: "Full replacement content for the truth file." }),
+  content: Type.String({
+    description: "Full replacement content for the truth file. When generating or rearranging outline/volume_map.md, default to Fanqie-style fast pacing. "
+      + "Plan the first three chapters individually. Start chapter one on the first actual encounter with the distinctive premise, backfill routine setup briefly, and show the first payoff in that chapter. "
+      + "Make each result lead to the next action. Preserve authored text supplied for exact replacement and established story facts.",
+  }),
   bookRulesData: Type.Optional(BookRulesDataToolSchema),
 });
 

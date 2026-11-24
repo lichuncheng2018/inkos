@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
+import { hydrateActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { DEFAULT_REVISE_MODE } from "../agents/reviser.js";
 import { getPlannerMemoSystemPrompt } from "../agents/planner-prompts.js";
 import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js";
 import { buildHarnessSystemPrompt } from "../harness/system-prompt.js";
 import { createReviseChapterTool, createWriteChaptersTool } from "../harness/tools/longform-production.js";
+import { loadBuiltinAgentSkills, resolveProfileSkillActivations } from "../skills/index.js";
 
 describe("longform high-score generation and revision path", () => {
+  it("gives the planner a reader-facing opening and payoff without delaying the premise to chapter two", async () => {
+    const { skills } = await loadBuiltinAgentSkills();
+    const profile = createBuiltInWorkProfileRegistry().require("longform-novel");
+    const active = await hydrateActivatedSkillGuidance(resolveProfileSkillActivations(skills, profile), "Plan chapter one.", "planner");
+    const readerContract = active?.flatMap((item) => item.resources).find((resource) =>
+      resource.path === "references/reader-contract-and-progression.md");
+    expect(readerContract?.body).not.toMatch(/in chapter two, demonstrate/i);
+    expect(readerContract?.body).toContain("the first chapter when the author asks for it");
+
+    const zh = getPlannerMemoSystemPrompt("zh");
+    const en = getPlannerMemoSystemPrompt("en");
+    expect(zh.split("## 二、场次")[0]).toMatch(/读者最想看[\s\S]+首场第一拍[\s\S]+当章结果/);
+    expect(en.split("## 2. Scenes")[0]).toMatch(/reader most wants to see[\s\S]+first beat of the first scene[\s\S]+result in this chapter/);
+  });
+
   it("plans concrete events and delegates prose cleanup to the writing pipeline without extra revision calls", () => {
     expect(DEFAULT_REVISE_MODE).toBe("spot-fix");
     expect(getPlannerMemoSystemPrompt("zh")).toContain("先定本章目标");
@@ -13,16 +30,16 @@ describe("longform high-score generation and revision path", () => {
     expect(getPlannerMemoSystemPrompt("zh")).not.toContain("其余写当天的活计");
     expect(getPlannerMemoSystemPrompt("zh")).toContain("手续和文书也一样");
     expect(getPlannerMemoSystemPrompt("zh")).toContain("三到五条，每条一句");
-    expect(getPlannerMemoSystemPrompt("zh")).toContain("写出当事人的即时反应和事情因此改变了什么");
+    expect(getPlannerMemoSystemPrompt("zh")).toContain("人物当场的反应，以及他下一步能做的事因此有什么不同");
     expect(getPlannerMemoSystemPrompt("zh")).not.toContain("章纲里不排体内感受、心理活动和感想");
     expect(getPlannerMemoSystemPrompt("zh")).toContain("突破、首次运用功法术法");
     expect(getPlannerMemoSystemPrompt("zh")).toContain("每章安排一处由事件推动的情绪或关系变化");
-    expect(getPlannerMemoSystemPrompt("zh")).toContain("独自修炼、制器、查探等行动");
-    expect(getPlannerMemoSystemPrompt("en")).toContain("In solo action such as cultivation");
+    expect(getPlannerMemoSystemPrompt("zh")).toContain("感知或理解变化、关键选择或领悟、代价与结果");
+    expect(getPlannerMemoSystemPrompt("en")).toContain("sensory or understanding shift, the choice or insight, and its cost or result");
     expect(getPlannerMemoSystemPrompt("en")).toContain("First set the chapter goal");
     expect(getPlannerMemoSystemPrompt("en")).toContain("Every event advances the goal, obstructs it");
     expect(getPlannerMemoSystemPrompt("en")).toContain("Paperwork is handled the same way");
-    expect(getPlannerMemoSystemPrompt("en")).toContain("immediate reaction and what it changes");
+    expect(getPlannerMemoSystemPrompt("en")).toContain("immediate reaction, and what they can do differently now");
     expect(getPlannerMemoSystemPrompt("en")).toContain("decisive process that produces it");
     expect(getPlannerMemoSystemPrompt("en")).toContain("Give the chapter an earned emotional movement");
 

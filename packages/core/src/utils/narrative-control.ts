@@ -1,16 +1,26 @@
-import type { ChapterIntent, ChapterMemo, ContextPackage } from "../models/input-governance.js";
+import type { ChapterMemo, ContextPackage } from "../models/input-governance.js";
 
 /**
- * Render a ChapterMemo + optional ChapterIntent into a sanitized narrative
- * control block for the writer / reviser prompt.
- *
- * The model-authored memo remains intact. Code adds only host-owned metadata.
+ * Separate the planner's Notes section for the writer only. The persisted
+ * memo, audit context and state settlement still see the complete plan.
  */
+export function splitChapterMemoBody(body: string): { scenes: string; notes: string } {
+  const text = body.replace(/\r\n?/g, "\n").trim();
+  const heading = /^ {0,3}##[ \t]+(?:备注|Notes)[ \t]*#*[ \t]*$/im.exec(text);
+  if (!heading) return { scenes: text, notes: "" };
+  const rest = text.slice(heading.index + heading[0].length);
+  const nextSection = rest.search(/^ {0,3}#{1,2}[ \t]+\S/m);
+  const after = nextSection < 0 ? "" : rest.slice(nextSection).trim();
+  return {
+    scenes: [text.slice(0, heading.index).trim(), after].filter(Boolean).join("\n\n"),
+    notes: (nextSection < 0 ? rest : rest.slice(0, nextSection)).trim(),
+  };
+}
+
 export function renderMemoAsNarrativeBlock(
   memo: ChapterMemo,
-  intent: ChapterIntent | undefined,
   language: "zh" | "en" = "zh",
-): string {
+): { task: string; notes: string } {
   const isEn = language === "en";
   const sections: string[] = [];
 
@@ -21,12 +31,9 @@ export function renderMemoAsNarrativeBlock(
     sections.push(`## ${isEn ? "Thread Refs" : "关联线索"}\n${threads}`);
   }
 
-  // Emit the 7-section memo body at top level so each heading is a task.
-  if (memo.body.trim().length > 0) {
-    sections.push(memo.body);
-  }
-
-  return sections.join("\n\n");
+  const { scenes, notes } = splitChapterMemoBody(memo.body);
+  if (scenes) sections.push(scenes);
+  return { task: sections.join("\n\n"), notes };
 }
 
 export function buildNarrativeIntentBrief(

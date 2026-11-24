@@ -7,6 +7,7 @@ import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prom
 import { createSettlementToolSchema, normalizeSettlementSubmission, validateSettlementHookIds } from "./settler-tool.js";
 import { readBookRules } from "./rules-reader.js";
 import { readChapterHeading } from "../utils/chapter-splitter.js";
+import { stripLeadingThinkBlock } from "../llm/think-tag-stripper.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
@@ -130,7 +131,6 @@ export class WriterAgent extends BaseAgent {
     const creativeUserPrompt = this.buildGovernedUserPrompt({
       chapterNumber,
       chapterMemo: input.chapterMemo,
-      chapterIntentData: input.chapterIntentData,
       contextPackage: input.contextPackage,
       externalContext: input.externalContext,
       previousChapter,
@@ -485,7 +485,6 @@ export class WriterAgent extends BaseAgent {
   private buildGovernedUserPrompt(params: {
     readonly chapterNumber: number;
     readonly chapterMemo: ChapterMemo;
-    readonly chapterIntentData?: ChapterIntent;
     readonly contextPackage: ContextPackage;
     readonly externalContext?: string;
     readonly previousChapter?: string;
@@ -515,7 +514,11 @@ export class WriterAgent extends BaseAgent {
       .join("\n\n");
     const reference = renderWriterContext(view, language);
     const previousTail = previousChapterTail(params.previousChapter);
-    const memo = renderMemoAsNarrativeBlock(params.chapterMemo, params.chapterIntentData, language);
+    const memo = renderMemoAsNarrativeBlock(params.chapterMemo, language);
+    const continuity = [
+      reference,
+      memo.notes && `### ${isEn ? "Continuity notes (check only)" : "章纲备注（只核对）"}\n${memo.notes}`,
+    ].filter(Boolean).join("\n\n");
     const lengthRequirementBlock = this.buildLengthRequirementBlock(params.lengthSpec, language);
 
     if (isEn) {
@@ -523,17 +526,17 @@ export class WriterAgent extends BaseAgent {
         `Write chapter ${params.chapterNumber}.`,
         this.buildChapterContextBlock(params.externalContext, language),
         direction ? `## User direction (overrides model defaults — must follow)\n${direction}` : "",
-        reference
-          ? `## Reference notes\nA ledger that keeps the chapter consistent: established facts, characters, setting and earlier events. Stay consistent with it wherever the chapter touches it; do not narrate it. Its bookkeeping and audit phrasing ("did not happen", "not recorded", opening and closing balances) is not prose style and must not leak into the narration.\n\n${reference}`
+        continuity
+          ? `## Continuity reference — constraints, not coverage\nKeep these facts true and obey their limits, but do not reveal them just because they are supplied. Mention a background fact or figure only when a character needs it now, the reader needs it to understand the current stakes, or the author expressly asks for it here.\n\n${continuity}`
           : "",
         previousTail
           ? `## End of the previous chapter\nThis chapter continues from here. Pick up its time, place and whatever the characters were in the middle of. It is already written; do not retell it.\n\n${previousTail}`
           : "",
-        `## Chapter memo\nThe memo decides what this chapter contains.\n\n${memo}`,
+        `## Chapter writing task\nShow these events and outcomes on the page.\n\n${memo.task}`,
         `How to use the memo:
+- Unless the author has chosen a different opening, start the prose when the memo's first event happens. If that beat combines preparation and a decisive action or discovery, open on the decisive moment or its immediate reaction and fold the preparation into the scene afterward.
 - Scenes marked "play out" are written as scenes happening now, with people talking and acting, and take most of the chapter. Lines marked "pass over" are told in a sentence or two.
-- "Notes" keep numbers and continuity right. Mention a figure only where the story uses it; do not walk through the ledger, and do not narrate things that did not happen. Boundaries in the notes ("X does not mean Y", "must not be written as Z") are for getting the chapter right; do not have characters say them aloud to set the record straight.
-- When paperwork comes up, pass it in a sentence: who hands what to whom and how they take it. Do not read the documents out item by item.
+- Give the most room to the moment that decides the chapter's goal. Once the reader knows the stakes and the character can act, show the attempt and its first visible result. Bring in background or explanation later if it affects what someone does next. Combine routine steps. If an earlier attempt or failure is already clear, bring its evidence back alongside the new result without replaying it. End on a reaction, changed action, or new pressure that follows from the result.
 - The memo is a list of events, not a paragraph plan: do not write one paragraph per item. Give each moment the room its weight deserves.`,
         `${lengthRequirementBlock}
 - Output the chapter directly: the first line is "Chapter ${params.chapterNumber}: Title", then a blank line, then the prose. Add no commentary, preamble or notes.`,
@@ -544,17 +547,17 @@ export class WriterAgent extends BaseAgent {
       `请写第${params.chapterNumber}章。`,
       this.buildChapterContextBlock(params.externalContext, language),
       direction ? `## 用户方向（优先于模型默认，必须遵循）\n${direction}` : "",
-      reference
-        ? `## 写作参考\n这是防止写错用的底账：既成事实、人物、设定和前情。写到相关处与它一致即可，不必写进正文；底账里记账、核对式的说法（“未发生”“不登记”“期初期末”之类）不是正文的写法，不要带进叙述。\n\n${reference}`
+      continuity
+        ? `## 连续性备查｜不是正文清单\n这些事实不能写错，限制不能突破，但给了资料不等于本章要交代。人物眼下用得上、读者不看就不明白眼前的利害，或作者明确要求此处交代，再写相关数字或背景。\n\n${continuity}`
         : "",
       previousTail
         ? `## 上一章结尾\n本章从这里接着往下写：时间、地点和人物手上的事要接得上。这段已经写过，不要复述。\n\n${previousTail}`
         : "",
-      `## 本章章纲\n章纲决定这一章写什么。\n\n${memo}`,
+      `## 本章正文任务\n把这里的事件和结果写在纸面上。\n\n${memo.task}`,
       `章纲怎么用：
+- 作者未另行指定开场时，正文从章策的首场第一拍起笔。如果这一拍包含准备和关键动作或发现，开篇直接落在关键动作发生或人物当场反应的那一刻，前置步骤随后按需补叙。
 - 标「展开」的场次写成当场发生的戏，人物来回说话、做事，占掉全章大部分篇幅；标「带过」的一两句交代完就走。
-- 「备注」只用来保证数字和前后一致：正文用到哪个数就提哪个数，不逐笔交代，也不写“没有发生什么”。备注里“某事不等于某事”“不能写成什么”这类边界，照着写对就行，不要让人物说出来替谁澄清。
-- 手续和文件写到时一句带过：谁把什么交给谁、对方怎么接，不逐条念文件内容。
+- 把最多笔墨给决定章目标的那一幕。读者明白利害、人物能够动手，就直接写这次尝试和第一个看得见的结果。只在影响下一步行动时补背景或解释。合并例行步骤。前文已经写清的尝试或失败，在新结果出来时拿旧证据对照，别再完整演一遍。章尾落在结果带来的反应、行动变化或新的压力上。
 - 章纲是事件清单，不是分段提纲：不要一条写一段，按场面的轻重自己分配篇幅和分段。`,
       `${lengthRequirementBlock}
 - 直接输出本章：第一行写“第${params.chapterNumber}章 标题”，空一行后写正文；不要输出任何说明、前言或备注。`,
@@ -762,7 +765,7 @@ ${selectedContext || "- none"}\n`;
 
 /** Split a plain-text draft into its numbered heading title and prose; title is absent when the draft has no heading. */
 export function parseChapterDraftText(text: string): { readonly title?: string; readonly content: string } {
-  const unfenced = text.replace(/\r\n?/g, "\n").trim().replace(/^```[^\n]*\n([\s\S]*?)\n?```$/u, "$1");
+  const unfenced = stripLeadingThinkBlock(text).replace(/\r\n?/g, "\n").trim().replace(/^```[^\n]*\n([\s\S]*?)\n?```$/u, "$1");
   const lines = unfenced.split("\n");
   const headingOf = (line: string) => readChapterHeading(line.trim().replace(/^\*\*(.+)\*\*$/u, "$1"));
   let start = lines.findIndex((line) => line.trim().length > 0);

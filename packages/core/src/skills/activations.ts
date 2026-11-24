@@ -26,14 +26,14 @@ const WORK_CREATION_SKILLS: Readonly<Record<string, string>> = {
 
 const PROSE_PROFILE_IDS: ReadonlySet<string> = new Set(["longform-novel", "short-fiction"]);
 
-const CHINESE_GENRE_VOICE_SKILLS: ReadonlyArray<{ readonly genre: RegExp; readonly skillId: string }> = [
-  { genre: /玄幻|修仙|仙侠|修真|高武|xuanhuan|xianxia|cultivation/i, skillId: "inkos-ziling-style" },
-];
+const CHINESE_FANTASY_GENRE = /玄幻|修仙|仙侠|修真|高武|xuanhuan|xianxia|cultivation/i;
 
 function genreVoiceSkillIds(work: WorkManifest): string[] {
+  if (!PROSE_PROFILE_IDS.has(work.profileId) || !/^zh/i.test(work.language)) return [];
   const genre = work.metadata.genre;
-  if (typeof genre !== "string" || !PROSE_PROFILE_IDS.has(work.profileId) || !/^zh/i.test(work.language)) return [];
-  return CHINESE_GENRE_VOICE_SKILLS.filter((voice) => voice.genre.test(genre)).map((voice) => voice.skillId);
+  return [typeof genre === "string" && CHINESE_FANTASY_GENRE.test(genre)
+    ? "inkos-ziling-style"
+    : "inkos-plainspoken-style"];
 }
 
 export function requiredWorkSkillIds(work: WorkManifest | null): string[] {

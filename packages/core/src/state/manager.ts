@@ -15,7 +15,8 @@ import {
 } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import type { WorkManifest } from "../harness/contracts.js";
-import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { toPosixPath } from "../utils/posix-path.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -621,9 +622,9 @@ export class StateManager {
   async rollbackToChapter(
     bookId: string,
     targetChapter: number,
+    archiveWrites: ReadonlyArray<AtomicFileWrite> = [],
   ): Promise<ReadonlyArray<number>> {
     const bookDir = this.bookDir(bookId);
-    const chaptersDir = join(bookDir, "chapters");
     const index = await this.loadChapterIndex(bookId);
     const restore = await this.prepareStateRestore(bookDir, targetChapter);
     if (!restore) throw new Error(`Cannot restore snapshot for chapter ${targetChapter} in "${bookId}"`);
@@ -640,23 +641,32 @@ export class StateManager {
     }
 
     const deletes = new Set(restore.deletes);
+    const work = await loadWorkManifest(this.projectRoot, bookId);
+    const registeredPaths = work.artifacts.flatMap((artifact) => artifact.revisions.map((revision) => revision.path));
     const collectNumberedDeletes = async (
       relativeDir: string,
       numberOf: (name: string) => number | undefined,
     ) => {
-      try {
-        for (const name of await readdir(join(bookDir, relativeDir))) {
-          const number = numberOf(name);
-          if (number !== undefined && number > targetChapter) deletes.add(join(relativeDir, name));
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const dirPrefix = `source/${toPosixPath(relativeDir)}/`;
+      const names = new Set(registeredPaths
+        .filter((path) => path.startsWith(dirPrefix))
+        .map((path) => path.slice(dirPrefix.length).split("/")[0]!));
+      for (const name of await readdir(join(bookDir, relativeDir)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      })) names.add(name);
+      for (const name of names) {
+        const number = numberOf(name);
+        if (number !== undefined && number > targetChapter) deletes.add(join(relativeDir, name));
       }
     };
     await collectNumberedDeletes("chapters", (name) => {
-      const match = /^(\d+)_.*\.md$/u.exec(name);
+      const match = /^(\d+)[_-]?.*\.md$/u.exec(name);
       return match ? Number.parseInt(match[1]!, 10) : undefined;
     });
+    await collectNumberedDeletes(join("chapters", ".versions"), (name) => (
+      /^\d+$/u.test(name) ? Number.parseInt(name, 10) : undefined
+    ));
     await collectNumberedDeletes(join("story", "snapshots"), (name) => {
       const value = Number.parseInt(name, 10);
       return Number.isFinite(value) ? value : undefined;
@@ -672,13 +682,18 @@ export class StateManager {
     for (const file of ["memory.db", "memory.db-shm", "memory.db-wal"]) {
       deletes.add(join("story", file));
     }
-    await commitAtomicFileSet({
-      rootDir: bookDir,
-      writes: [
-        ...restore.writes,
-        { relativePath: join("chapters", "index.json"), content: `${JSON.stringify(kept, null, 2)}\n` },
-      ],
-      deletes: [...deletes],
+    const sourceRoot = join("works", bookId, "source");
+    const writes = [
+      ...restore.writes,
+      ...archiveWrites,
+      { relativePath: join("chapters", "index.json"), content: `${JSON.stringify(kept, null, 2)}\n` },
+    ];
+    await syncWorkSourceArtifacts({
+      projectRoot: this.projectRoot,
+      workId: bookId,
+      accept: true,
+      writes: writes.map((write) => ({ ...write, relativePath: join(sourceRoot, write.relativePath) })),
+      deletes: [...deletes].map((path) => join(sourceRoot, path)),
     });
     return discarded;
   }

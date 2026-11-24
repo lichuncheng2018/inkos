@@ -12,6 +12,7 @@ export interface NotifyChannelDraft {
 
 export interface OverrideRow {
   agent: string;
+  service: string;
   model: string;
   rest?: Record<string, unknown>;
 }
@@ -56,6 +57,40 @@ function stringField(value: unknown): string | undefined {
 
 function booleanField(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+export function overrideDraftFromConfig(agent: string, value: unknown): OverrideRow {
+  if (typeof value === "string") return { agent, service: "", model: value };
+  const raw = asRecord(value);
+  return {
+    agent,
+    service: stringField(raw.service) ?? "",
+    model: stringField(raw.model) ?? "",
+    rest: omitKeys(raw, ["service", "model"]),
+  };
+}
+
+export function changeOverrideService(row: OverrideRow, service: string): OverrideRow {
+  if (row.service === service) return row;
+  return {
+    ...row,
+    service,
+    // Switching configurations also switches the endpoint, credentials and transport settings.
+    rest: omitKeys(row.rest ?? {}, ["baseUrl", "provider", "apiFormat", "apiKeyEnv", "stream"]),
+  };
+}
+
+export function buildModelOverrides(rows: ReadonlyArray<OverrideRow>): Record<string, unknown> {
+  const entries: Array<[string, string | Record<string, unknown>]> = [];
+  for (const row of rows) {
+    const agent = row.agent.trim();
+    const model = row.model.trim();
+    const service = row.service.trim();
+    if (!agent || !model) continue;
+    const options = { ...row.rest, ...(service ? { service } : {}) };
+    entries.push([agent, Object.keys(options).length > 0 ? { ...options, model } : model]);
+  }
+  return Object.fromEntries(entries);
 }
 
 export function notifyDraftFromChannel(value: unknown): NotifyChannelDraft {

@@ -1,5 +1,6 @@
-import {splitSourceLines} from './source-text.js';
+import {sourceLineBodies,splitSourceLines} from './source-text.js';
 import {readChapterHeading} from './chapter-splitter.js';
+import {stripLeadingThinkBlock} from '../llm/think-tag-stripper.js';
 
 export function chapterDocumentHeading(number:number,title:string,language:'zh'|'en'):string{
   return language==='en'?`# Chapter ${number}: ${title}`:`# 第${number}章 ${title}`;
@@ -18,7 +19,12 @@ export function chapterDocumentBody(content:string,number:number,title:string,la
     while(cursor<lines.length&&!lines[cursor]!.trim())cursor++;
     bodyStart=cursor;
   }
-  return bodyStart?lines.slice(bodyStart).join(''):content;
+  const body=bodyStart?lines.slice(bodyStart).join(''):content;
+  const unwrapped=stripLeadingThinkBlock(body);
+  if(unwrapped!==body&&readChapterHeading(sourceLineBodies(unwrapped)[0]??'')?.number===number){
+    return chapterDocumentBody(unwrapped,number,title,language);
+  }
+  return body;
 }
 
 export function renderChapterDocument(number:number,title:string,content:string,language:'zh'|'en'):string{

@@ -21,7 +21,7 @@ export function buildWriterSystemPrompt(
         lengthContract(resolvedLength, "en"),
         narrativePersonContract(bookRules, "en"),
         protagonistContract(bookRules, "en"),
-        authorityBlock("Book rules", bookRulesBody),
+        authorityBlock("Book rules (standing constraints, not chapter coverage)", bookRulesBody),
         authorityBlock("Style guide", styleGuide),
       ]
     : [
@@ -30,7 +30,7 @@ export function buildWriterSystemPrompt(
         lengthContract(resolvedLength, "zh"),
         narrativePersonContract(bookRules, "zh"),
         protagonistContract(bookRules, "zh"),
-        authorityBlock("本书规则", bookRulesBody),
+        authorityBlock("本书规则（长期约束，不是本章出场清单）", bookRulesBody),
         authorityBlock("文风指南", styleGuide),
       ];
   return sections.filter(Boolean).join("\n\n");
@@ -39,12 +39,12 @@ export function buildWriterSystemPrompt(
 function governedContract(language: "zh" | "en"): string {
   return language === "en"
     ? `## Authority
-The current chapter instruction and the chapter memo govern this chapter. Established facts, explicit prohibitions and the setting in the reference notes remain binding. The outline is a fallback only where the memo is silent. Realize the memo requirements through events and outcomes. Planning, inventory and validation wording is not a prose template: express it using the active style guidance without reciting its checklist. Do not duplicate or rename an existing narrative promise.
+The current instruction and chapter writing task decide what happens on the page. Established facts, explicit prohibitions and setting remain binding; follow any explicit instruction to reveal something now. The rest of the book rules and continuity reference limit what can be true; they do not require disclosure. Do not turn their inventory or procedures into narration or dialogue. The outline is a fallback only where the task is silent. Do not duplicate or rename an existing narrative promise.
 
 ## Voice
 The narration has one voice. Take it from the first of these that speaks to the point, and use the later ones only for what the earlier ones leave open, never as a second voice alongside: a style request the author made this turn; the style agreed in the author intent; the style guide; style clauses in the book rules; the activated voice Skill; the general writing Skill's defaults.`
     : `## 权威顺序
-本章指令和章纲决定本章任务；既成事实、显式禁令和写作参考里的设定必须保持一致。卷纲只在章纲没有覆盖的地方作为兜底。章纲的要求通过事件与结果落地；规划、账本和验收用语不作为正文模板，应按当前文风要求自然表达，不照抄核对清单。不要为同一承诺重复开 hook，也不要改名既有叙事承诺。
+本章指令和正文任务决定纸面上发生什么。既成事实、显式禁令和设定必须遵守，明确要求在本章揭示的事照写；书规和备查资料的其他内容只约束能写成什么样，不要求逐项交代，不把账目或流程改写成旁白、对白。卷纲只在本章任务没有覆盖的地方兜底。不要为同一承诺重复开 hook，也不要改名既有叙事承诺。
 
 ## 文风来源
 全章只用一套叙述口吻，按下面的顺序取：用户这一轮亲口提的文风要求；作者意图里的文风约定；文风指南；本书规则里的文风条款；已激活的文风 Skill；通用写作 Skill 的默认表达。靠前的有明确约定时，靠后的只补它没说到的地方，不并用两套口吻。`;

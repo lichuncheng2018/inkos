@@ -6,7 +6,10 @@ import { fetchWithProxy } from "../utils/proxy-fetch.js";
 
 vi.mock("../utils/proxy-fetch.js", () => ({ fetchWithProxy: vi.fn() }));
 
-it("sends only reader-visible context and requires evidence from the current chapter", async () => {
+it.each([
+  ["en", "the first line where the reader can see the result", "cite both the first telling and the repetition"],
+  ["zh", "读者在哪一行第一次亲眼看到结果", "同时引用首次出现和重复的行号"],
+] as const)("sends only reader-visible context and checks the payoff and repetition (%s)", async (language, payoffCheck, repetitionCheck) => {
   const agent = new ReaderSimulatorAgent({
     projectRoot: "/tmp",
     model: "fixture",
@@ -36,7 +39,7 @@ it("sends only reader-visible context and requires evidence from the current cha
     chapterTitle: "The Signature",
     chapterContent: "She folded the receipt without reading it.\nThe clerk waited.",
     previousChapterSummary: "",
-    language: "en",
+    language,
   });
 
   expect(result.observations[0]).toMatchObject({ code: "reader-weak-payoff", assessment: "issue" });
@@ -45,6 +48,8 @@ it("sends only reader-visible context and requires evidence from the current cha
   expect(tool.name).toBe("submit_reader_simulation");
   expect(options).toMatchObject({ professionalGuidance: false, includeAuthorRequest: false });
   expect(messages).toHaveLength(2);
+  expect(messages[0]!.content).toContain(payoffCheck);
+  expect(messages[0]!.content).toContain(repetitionCheck);
   expect(messages[0]!.content).toContain('"sourceRefs":[{"sourceId":"chapter-1","startLine":1,"endLine":1}]');
   const userInput = JSON.parse(messages[1]!.content);
   expect(userInput.story).toEqual({ title: "The Receipt", genre: "Mystery", platform: "Fiction app" });

@@ -141,38 +141,61 @@ describe("AgentSkills registry", () => {
     ]);
   });
 
-  it("writes Chinese xuanhuan prose Works in the Ziling voice without affecting other Works", async () => {
+  it("uses distinct default voices for Chinese xuanhuan and other Chinese prose", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-genre-voice-"));
     try {
       const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: "https://example.invalid/v1", apiKey: "fixture", apiFormat: "chat", stream: true, temperature: 0, thinkingBudget: 0 });
-      const writerPrompt = async (metadata: Record<string, unknown>, language = "zh", profileId = "longform-novel") => {
+      const workerPrompt = async (metadata: Record<string, unknown>, language = "zh", profileId = "longform-novel", worker = "writer") => {
         const work = createWorkManifest({ id: "voice-work", title: "Voice Work", profileId, language, metadata });
         const applied: string[] = [];
         const messages = await withExecutionEvidence(
           (type, payload) => {
             if (type === "skills-applied") applied.push(...(payload.skills as Array<{ id: string }>).map((skill) => skill.id));
           },
-          () => prepareWorkerMessages({ client, projectRoot: root }, [{ role: "user", content: "写下一章。" }], 128, "writer"),
+          () => prepareWorkerMessages({ client, projectRoot: root }, [{ role: "user", content: "处理本章。" }], 128, worker),
           createBuiltInWorkProfileRegistry().require(profileId),
           work,
         );
         return { applied, text: messages.map((message) => message.content).join("\n") };
       };
 
-      const xianxia = await writerPrompt({ genre: "传统玄幻修仙/系统爽文" });
+      const xianxia = await workerPrompt({ genre: "传统玄幻修仙/系统爽文" });
       expect(xianxia.applied).toEqual(["inkos-long-writing", "inkos-ziling-style"]);
       expect(xianxia.text).toContain("# 紫灵风雪流修仙文风");
       expect(xianxia.text).not.toContain("三开流玄幻文风");
-      expect((await writerPrompt({ genre: "xuanhuan", creationKind: "imitation" })).applied)
+      expect((await workerPrompt({ genre: "xuanhuan", creationKind: "imitation" })).applied)
         .toEqual(["inkos-long-writing", "inkos-imitation-writing", "inkos-ziling-style"]);
 
+      expect(xianxia.text).not.toContain("用大白话把事说清楚");
+      expect((await workerPrompt({ genre: "高武" }, "zh", "short-fiction")).applied)
+        .toEqual(["inkos-short-writing", "inkos-ziling-style"]);
+
+      const urbanGenre = { genre: "都市重生、科技创业、系统流" };
+      const urban = await workerPrompt(urbanGenre);
+      expect(urban.applied).toEqual(["inkos-long-writing", "inkos-plainspoken-style"]);
+      expect(urban.text).toContain("数到亿，左边怎么还有四位？");
+      expect(urban.text).toContain("准是哪儿数岔了，他又从个位数起，这回数慢了点，数到亿，左边还是四位。");
+      expect(urban.text).toContain("章纲不是按顺序念的清单");
+      expect(urban.text).toContain("遥遥领先");
+      expect(urban.text).not.toContain("紫灵风雪流修仙文风");
+      for (const worker of ["writer", "reviser", "continuity-auditor"]) {
+        const prompt = worker === "writer" ? urban : await workerPrompt(urbanGenre, "zh", "longform-novel", worker);
+        expect(prompt.text).toContain("用大白话把事说清楚");
+        expect(prompt.text).toContain("不另编一段往事替他找理由");
+        expect(prompt.text).toContain("一段陈述正文只在段末放一个句号");
+      }
+      const short = await workerPrompt({}, "zh-CN", "short-fiction");
+      expect(short.applied).toEqual(["inkos-short-writing", "inkos-plainspoken-style"]);
+      expect(short.text).toContain("用大白话把事说清楚");
+
       for (const other of [
-        await writerPrompt({ genre: "都市重生、科技创业、系统流" }),
-        await writerPrompt({ genre: "xianxia" }, "en"),
-        await writerPrompt({ genre: "玄幻" }, "zh", "interactive-film"),
+        await workerPrompt({ genre: "xianxia" }, "en"),
+        await workerPrompt({ genre: "urban" }, "en"),
+        await workerPrompt({ genre: "玄幻" }, "zh", "interactive-film"),
+        await workerPrompt({ genre: "都市" }, "zh", "script"),
       ]) {
         expect(other.applied).not.toContain("inkos-ziling-style");
-        expect(other.text).not.toContain("紫灵风雪流修仙文风");
+        expect(other.applied).not.toContain("inkos-plainspoken-style");
       }
     } finally {
       await rm(root, { recursive: true, force: true });

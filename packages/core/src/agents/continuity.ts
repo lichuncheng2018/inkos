@@ -8,6 +8,8 @@ import {currentExecutionBaselineWork} from '../harness/execution-evidence.js';
 import {chapterDocumentBody} from '../utils/chapter-document.js';
 import {changedSourceRegion} from '../utils/source-text.js';
 
+export const PROCEDURE_DISPLACES_SCENE = "procedure-displaces-scene";
+
 export interface AuditResult {
   readonly observations: ReadonlyArray<Observation>;
   readonly summary: string;
@@ -37,9 +39,13 @@ export class ContinuityAuditor extends BaseAgent {
     },
   ): Promise<AuditResult> {
     const isEnglish = options.language === "en";
-    const systemPrompt = isEnglish
+    const reviewProtocol = isEnglish
       ? "Audit this chapter against the activated review Skill and supplied governed context. Identify each observation with a code, assessment and exact numbered source lines. Do not estimate length; the host computes it. Return a concise overall summary. An empty observations array is valid."
       : "按已激活的审稿 Skill 和权威上下文审查本章。为每条观察提交代码、判断以及所给编号原文中的确切证据行。不估算字数，字数由宿主计算。提交简短总结，observations 为空是合法结果。";
+    const sceneReview = isEnglish
+      ? `Read each exchange as a whole. If several lines or paragraphs enumerate procedures or background without changing anyone's choice, risk or next action, report a quality issue as ${PROCEDURE_DISPLACES_SCENE} and cite the continuous span in the current chapter. Identify the consequential fact or action to keep and what can be passed over. Do not flag a technical detail or figure that actually drives the decision.`
+      : `把一场交涉连起来读。若连续多句或多段在逐项念流程、账目或设定，却没有改变谁的决定、风险或下一步行动，用 ${PROCEDURE_DISPLACES_SCENE} 报一条正文质量问题，引用当前章节里受影响的连续行。说清哪条事实或动作改变了局面、必须留下，哪些交代可以带过。不要因为出现技术细节或数字就报问题。`;
+    const systemPrompt = `${reviewProtocol}\n\n${sceneReview}`;
     const governedContext = renderNarrativeSelectedContext(
       options.contextPackage.selectedContext,
       options.language,

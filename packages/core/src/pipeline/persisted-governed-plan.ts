@@ -18,6 +18,7 @@ const PersistedPlanSchema = z.object({
   intent: ChapterIntentSchema,
   memo: ChapterMemoSchema,
   plannerInputs: z.array(z.string()),
+  readerReviewed: z.boolean().optional(),
 });
 
 function planPath(bookDir: string, chapterNumber: number): string {
@@ -41,6 +42,7 @@ export async function savePersistedPlan(
     intent: plan.intent,
     memo: plan.memo,
     plannerInputs: plan.plannerInputs,
+    readerReviewed: plan.readerReviewed,
   });
   await writeFile(planPath(bookDir, plan.memo.chapter), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
@@ -75,6 +77,7 @@ export async function loadPersistedPlan(
     intentMarkdown,
     plannerInputs: persisted.plannerInputs,
     runtimePath: intentPath(bookDir, chapterNumber),
+    ...(persisted.readerReviewed ? { readerReviewed: true } : {}),
   };
 }
 

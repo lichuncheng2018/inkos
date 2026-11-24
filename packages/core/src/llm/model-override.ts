@@ -49,6 +49,7 @@ export function resolveAgentModelOverride(input: {
   });
   const serviceKey = objectOverride?.service
     ?? (entry ? catalogServiceKey(entry) : llm.service);
+  const usesDefaultService = !objectOverride?.service || serviceKey === llm.service;
   const apiFormat = objectOverride?.apiFormat
     ?? entry?.apiFormat
     ?? impliedApiFormat(resolveServicePreset(baseServiceId(serviceKey))?.api)
@@ -56,20 +57,22 @@ export function resolveAgentModelOverride(input: {
     ?? "chat";
   const stream = objectOverride?.stream ?? entry?.stream ?? llm.stream ?? true;
   const baseUrl = objectOverride?.baseUrl
-    ?? entry?.baseUrl
-    ?? resolveServicePreset(baseServiceId(serviceKey))?.baseUrl
-    ?? llm.baseUrl;
-  const sameEndpoint = sameLlmEndpoint(llm, { baseUrl, apiFormat, stream });
+    || entry?.baseUrl
+    || resolveServicePreset(baseServiceId(serviceKey))?.baseUrl
+    || (usesDefaultService ? llm.baseUrl : undefined);
+  if (!baseUrl) throw new Error(`No endpoint is configured for model service "${serviceKey}".`);
+
+  const useDefaultApiKey = usesDefaultService && sameLlmEndpoint(llm, { baseUrl, apiFormat, stream });
   const apiKey = resolveOverrideApiKey({
     override: objectOverride,
     serviceKey,
     llm,
     projectRoot,
-    sameEndpoint,
+    useDefaultApiKey,
     getApiKey: input.getApiKey,
   });
 
-  if (sameEndpoint) {
+  if (useDefaultApiKey && !objectOverride?.apiKeyEnv && (!objectOverride?.provider || objectOverride.provider === llm.provider)) {
     return { model, reuseDefaultClient: true };
   }
 
@@ -106,10 +109,8 @@ function findCatalogEntry(
 ): CatalogServiceEntry | undefined {
   const services = catalogEntries(llm);
   if (hints.service) {
-    const hinted = services.find((entry) =>
-      catalogServiceKey(entry) === hints.service || entry.service === hints.service
-    );
-    if (hinted) return hinted;
+    return services.find((entry) => catalogServiceKey(entry) === hints.service)
+      ?? services.find((entry) => entry.service === hints.service);
   }
   if (hints.baseUrl) {
     const byUrl = services.find((entry) => normalizeBaseUrl(entry.baseUrl ?? "") === normalizeBaseUrl(hints.baseUrl ?? ""));
@@ -152,13 +153,13 @@ function resolveOverrideApiKey(input: {
   readonly serviceKey: string;
   readonly llm: LLMConfig;
   readonly projectRoot: string;
-  readonly sameEndpoint: boolean;
+  readonly useDefaultApiKey: boolean;
   readonly getApiKey?: (serviceKey: string) => string | null;
 }): string {
   if (input.override?.apiKeyEnv) {
     return process.env[input.override.apiKeyEnv] ?? "";
   }
-  if (input.sameEndpoint) return input.llm.apiKey ?? "";
+  if (input.useDefaultApiKey) return input.llm.apiKey ?? "";
   const readKey = input.getApiKey ?? ((serviceKey: string) => getServiceApiKeySync(input.projectRoot, serviceKey));
   return readKey(input.serviceKey) ?? "";
 }

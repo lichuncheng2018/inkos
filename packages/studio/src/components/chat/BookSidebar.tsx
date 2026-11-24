@@ -6,6 +6,7 @@ import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
 import { ChapterPublishActions } from "../CopyChapterButton";
+import { ChapterManuscriptEditor } from "../ChapterManuscriptEditor";
 import { tr } from "../../lib/app-language";
 import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
@@ -60,7 +61,7 @@ function renderTruthBody(
   return <Streamdown plugins={streamdownPlugins} mode="static">{content}</Streamdown>;
 }
 
-function ArtifactView({ bookId }: { readonly bookId: string }) {
+function ArtifactView({ bookId, t }: { readonly bookId: string; readonly t: TFunction }) {
   const artifactFile = useChatStore((s) => s.artifactFile);
   const artifactChapter = useChatStore((s) => s.artifactChapter);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
@@ -159,6 +160,7 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
         )}
         {!loading && content !== null && !editing && (
           <button
+            aria-label={t("reader.edit")}
             onClick={handleEdit}
             className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
           >
@@ -190,6 +192,17 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
           </div>
         ) : content === null ? (
           <p className="text-[14px] leading-6 text-muted-foreground/50 italic px-4 py-3">文件不存在</p>
+        ) : editing && artifactChapter !== null ? (
+          <ChapterManuscriptEditor
+            key={`${bookId}-${artifactChapter}`}
+            bookId={bookId}
+            chapterNumber={artifactChapter}
+            content={editContent}
+            onChange={setEditContent}
+            saving={saving}
+            t={t}
+            className="w-full flex-1 min-h-[300px] bg-transparent text-[15px] leading-7 px-4 py-3 resize-none outline-none border-0 font-mono"
+          />
         ) : editing ? (
           <textarea
             value={editContent}
@@ -295,7 +308,7 @@ export function BookSidebar({ bookId, theme, t, sse }: BookSidebarProps) {
         className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors z-10"
       />
       {sidebarView === "artifact" ? (
-        <ArtifactView bookId={bookId} />
+        <ArtifactView bookId={bookId} t={t} />
       ) : (
         <PanelView bookId={bookId} theme={theme} t={t} sse={sse} />
       )}
@@ -330,7 +343,7 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
               </button>
             </div>
             {sidebarView === "artifact" ? (
-              <ArtifactView bookId={bookId} />
+              <ArtifactView bookId={bookId} t={t} />
             ) : (
               <PanelView bookId={bookId} theme={theme} t={t} sse={sse} />
             )}

@@ -48,6 +48,7 @@ it.each(["completed", "failed", "empty", "aborted"] as const)("runs deslop after
     intentMarkdown: "Show Mara deciding whether to sign.",
     runtimePath: "runtime/chapter-1.intent.md",
     plannerInputs: [],
+    readerReviewed: true,
   });
 
   const order: string[] = [];
@@ -59,6 +60,14 @@ it.each(["completed", "failed", "empty", "aborted"] as const)("runs deslop after
   const deslopContent = "Before checking the name, Mara signs the receipt. The clerk seals it.";
   const readerSource = deslopStatus === "completed" ? deslopContent : draft.content;
   const revisedContent = "Mara checks the name, then signs the receipt. The clerk seals it.";
+  const citedSpan = "Mara signs the receipt before checking the name.";
+  const sceneFinding = {
+    code: "procedure-displaces-scene", category: "quality" as const, assessment: "issue" as const,
+    summary: "The explanation repeats the record without changing the decision.",
+    evidence: [],
+    sourceRefs: [{ sourceId: "chapter-1", quote: citedSpan }],
+  };
+  const hasSceneFinding = deslopStatus === "completed";
   vi.spyOn(WriterAgent.prototype, "writeChapter").mockImplementation(async () => {
     order.push("writer");
     return draft;
@@ -70,7 +79,14 @@ it.each(["completed", "failed", "empty", "aborted"] as const)("runs deslop after
   });
   vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockImplementation(async () => {
     order.push("audit");
-    return { summary: "The scene is clear.", observations: [], tokenUsage: { promptTokens: 4, completionTokens: 5, totalTokens: 9 } };
+    return {
+      summary: "Reviewed the scene.",
+      observations: [
+        { ...sceneFinding, code: "unrelated-finding" },
+        ...(hasSceneFinding ? [sceneFinding] : []),
+      ],
+      tokenUsage: { promptTokens: 4, completionTokens: 5, totalTokens: 9 },
+    };
   });
   const reader = vi.spyOn(ReaderSimulatorAgent.prototype, "simulateChapter").mockImplementation(async (input) => {
     order.push("reader");
@@ -89,11 +105,14 @@ it.each(["completed", "failed", "empty", "aborted"] as const)("runs deslop after
     };
   });
   const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockImplementation(async function (this: ReviserAgent, ...args) {
-    if (args[4] === "anti-detect") {
+    if (args[6]?.contextPackage.selectedContext.some((entry) => entry.source === "pipeline:semantic-prose-cleanup")) {
       order.push("deslop");
       expect(args[1]).toBe(draft.content);
       expect(args[2]).toBe(1);
       expect(args[5]).toBe("Mystery");
+      expect(args[4]).toBe(hasSceneFinding ? "spot-fix" : "anti-detect");
+      expect(args[3]).toEqual(hasSceneFinding ? [{ ...sceneFinding, evidence: [citedSpan] }] : []);
+      expect(args[6]?.targetText).toBe(hasSceneFinding ? citedSpan : undefined);
       expect(args[6]).toMatchObject({ language: "en", chapterTitle: draft.title, proseChannel: "text" });
       const context = (this as unknown as { ctx: { activatedSkills: { skill: { id: string } }[] } }).ctx;
       expect(context.activatedSkills.map(({ skill }) => skill.id)).toContain("inkos-story-deslop");

@@ -330,9 +330,24 @@ ${reviseFrom.userFeedback || "（无）"}
     readonly temperature: number;
     readonly onOutline?: (outline: { readonly storyFrame: string; readonly volumeMap: string }) => void | Promise<void>;
   }): Promise<ArchitectOutput> {
+    const volumePacing = input.language === "en"
+      ? `## Volume map: Fanqie-style fast pacing
+- Use this pacing by default regardless of genre or platform metadata. Keep explicit plot constraints and events already established in prose. Reorder draft events within the requested revision scope when needed to deliver an earlier result.
+- Break out the first three chapters individually (or all available chapters if fewer). For each, name the opening action, the protagonist's decisive move, the result the reader can see in this chapter, and what that result sets in motion. Use brief causal beats.
+- Start chapter one at the first readable moment when the protagonist actually encounters or uses this book's distinctive premise, or where the central question of a mystery comes to life. Check the first beat: if it would play out the same way without the premise, and the author did not require that opening, enter at the premise event and briefly backfill only the necessary context.
+- Put the first visible payoff in chapter one: show an actual result of a first use, choice, clash, or discovery. Activating an ability, accepting a task, and starting work are beginnings. If the author reserves a major event for later, find the first smaller result the protagonist can earn now.
+- Let chapters two and three build on the result. A win, loss, proof, new option, or cost should change the next decision. Keep the larger conflict alive while delivering a small complete arc in the opening.
+- Plan later arcs as a sequence of short promises and visible results that build toward the volume's turning point. Merge routine procedures and background into the beats that need them. Do not spend a chapter on setup or split one simple outcome across multiple chapters merely to fill the count.`
+      : `## 卷纲默认采用番茄爽文节奏
+- 题材和原平台标注都不切换节奏。保留作者明确指定的剧情时点和已写成正文的事实。重排卷纲时，可以在用户指定范围内调整旧卷纲里尚未写成正文的场次与章次。
+- 前三章逐章排，作品不足三章就按实际章数排。每章用简短的因果节拍写清开场动作、主角做的关键一步、当章能看到的结果、这个结果带出的下一步。
+- 第一章首拍就写主角首次撞见、启动或用到本书独特卖点的那一下，或让悬疑的核心问题当场发生。检查首拍：去掉本书卖点，这个动作是否还照样发生？如果会，而且作者没有指定这个开场，就切到卖点实际登场的时刻。早些时候的例行故障、试错、赶路和准备，按需要简短补叙。
+- 第一章给出第一次看得见的兑现。让主角用一次能力、作一次选择、打一次交锋或证实一个发现，读者当场见到它改变了什么。亮出能力、接下任务、开始动手都只是起点。大事按作者要求留在后面时，本章先兑现一个主角能争取到的小结果。
+- 第二、三章吃到前章结果改变的局面。让一次收获、失败、证据、机会或代价改变下一步选择，前三章完成一个小闭环，并留下下一轮要解决的事。
+- 后续按短剧情推进，每段接连兑现小目标，再推向卷末的变化。前史、日常流程和重复试错合并到用得上的事件里。每章都安排看得见的推进，避免为了凑章数把一次简单结果拆成几章铺垫。`;
     const { result: outline } = await this.submitStructured(
       [
-        { role: "system", content: input.systemPrompt },
+        { role: "system", content: `${input.systemPrompt}\n\n${volumePacing}` },
         { role: "user", content: input.userMessage },
       ],
       {

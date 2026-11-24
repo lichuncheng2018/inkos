@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { parseChapterDraftText } from "../agents/writer.js";
+import { renderChapterDocument } from "../utils/chapter-document.js";
 
 describe("parseChapterDraftText", () => {
+  it("keeps the generated opening after a gateway thought block and numbered title", () => {
+    expect(parseChapterDraftText("<think>工作笔记</think>第1章 星穹初试\n\n【星穹已激活】")).toEqual({
+      title: "星穹初试", content: "【星穹已激活】",
+    });
+    expect(renderChapterDocument(1, "星穹初试", "# 第1章 星穹初试\n\n<think>工作笔记</think>第1章 还剩这一种\n\n【星穹已激活】", "zh"))
+      .toBe("# 第1章 星穹初试\n\n【星穹已激活】");
+  });
   it("takes the title from a numbered heading and keeps the prose intact", () => {
     expect(parseChapterDraftText("第1章 先把修为翻一倍\n\n第1日，子时。\n\n他数了两遍灵石。")).toEqual({
       title: "先把修为翻一倍",

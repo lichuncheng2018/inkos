@@ -4,6 +4,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { ChapterWorkspacePanel } from "../components/ChapterWorkspacePanel";
+import { ChapterManuscriptEditor } from "../components/ChapterManuscriptEditor";
 import { ChapterPublishActions } from "../components/CopyChapterButton";
 import {
   ChevronLeft,
@@ -215,9 +216,13 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
         </header>
 
         {editing ? (
-          <textarea
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
+          <ChapterManuscriptEditor
+            bookId={bookId}
+            chapterNumber={chapterNumber}
+            content={editContent}
+            onChange={setEditContent}
+            saving={saving}
+            t={t}
             className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[1.8] text-foreground/90 focus:outline-none resize-none border border-border/30 rounded-lg p-6 focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all"
             autoFocus
           />

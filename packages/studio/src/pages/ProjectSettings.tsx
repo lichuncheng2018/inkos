@@ -5,13 +5,17 @@ import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { CHAPTER_LOCAL_WRITE_AGENT } from "../shared/chapter-local-write";
 import {
   buildDetectionConfig,
+  buildModelOverrides,
   buildNotifyChannel,
+  changeOverrideService,
   DEFAULT_DETECTION,
   detectionDraftFromConfig,
   notifyDraftFromChannel,
   NOTIFY_TYPES,
+  overrideDraftFromConfig,
   type DetectionDraft,
   type NotifyChannelDraft,
   type NotifyType,
@@ -34,6 +38,12 @@ interface SkillsResponse {
   readonly diagnostics?: ReadonlyArray<{ readonly path?: string; readonly message?: string }>;
 }
 
+interface ConfiguredService {
+  readonly service: string;
+  readonly name?: string;
+  readonly models?: ReadonlyArray<string>;
+}
+
 interface ResearchSearchDraft {
   readonly enabled: boolean;
   readonly provider: "tavily" | "custom";
@@ -54,6 +64,8 @@ const MODEL_ROUTE_AGENTS = [
   ["writer", "写手"],
   ["auditor", "审稿员"],
   ["reviser", "修订员"],
+  [CHAPTER_LOCAL_WRITE_AGENT, "局部编写"],
+  ["chapter-plan-reviewer", "章策读者审查"],
   ["reader-simulator", "读者模拟器"],
   ["architect", "设定架构师"],
   ["radar", "市场雷达"],
@@ -112,11 +124,13 @@ function SettingsCard({
 }
 
 const fieldClass = "w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm outline-none focus:border-primary/50";
+const MANUAL_MODEL_OPTION = ":manual-model";
 
 export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
   const { data: overridesData, refetch: refetchOverrides } = useApi<{ overrides: Record<string, unknown> }>("/project/model-overrides");
+  const { data: serviceConfigData, refetch: refetchServiceConfig } = useApi<{ services: ReadonlyArray<ConfiguredService> }>("/services/config");
   const { data: defaultModelData, refetch: refetchDefaultModel } = useApi<{ service: string | null; defaultModel: string | null }>("/project/default-model");
   const { data: researchSearchData, refetch: refetchResearchSearch } = useApi<{ researchSearch: Partial<ResearchSearchDraft> }>("/project/research-search");
   const { data: notifyData, refetch: refetchNotify } = useApi<{ channels: unknown[] }>("/project/notify");
@@ -124,6 +138,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const { data: skillsData, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
   const [defaultService, setDefaultService] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
+  const [manualDefaultModel, setManualDefaultModel] = useState(false);
   const [researchSearch, setResearchSearch] = useState<ResearchSearchDraft>({ ...DEFAULT_RESEARCH_SEARCH });
   const [overrideRows, setOverrideRows] = useState<OverrideRow[]>([]);
   const [notifyChannels, setNotifyChannels] = useState<NotifyChannelDraft[]>([]);
@@ -134,20 +149,24 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
   const toolDetailsDefaultOpen = usePreferencesStore((s) => s.toolDetailsDefaultOpen);
   const setToolDetailsDefaultOpen = usePreferencesStore((s) => s.setToolDetailsDefaultOpen);
   const skills = skillsData?.skills ?? [];
+  const routeServices = (serviceConfigData?.services ?? []).map((entry) => ({
+    id: entry.service === "custom" ? `custom:${entry.name ?? "Custom"}` : entry.service,
+    label: entry.name ?? (entry.service === "custom" ? "Custom" : entry.service),
+    models: entry.models ?? [],
+  }));
+  const defaultServiceConfig = routeServices.find((service) => service.id === defaultService);
+  const defaultModelOptions = defaultServiceConfig?.models ?? [];
 
   useEffect(() => {
     if (!overridesData) return;
-    setOverrideRows(Object.entries(overridesData.overrides ?? {}).map(([agent, val]) => {
-      if (typeof val === "string") return { agent, model: val };
-      const { model, ...rest } = (val ?? {}) as { model?: string };
-      return { agent, model: model ?? "", rest };
-    }));
+    setOverrideRows(Object.entries(overridesData.overrides ?? {}).map(([agent, value]) => overrideDraftFromConfig(agent, value)));
   }, [overridesData]);
 
   useEffect(() => {
     if (!defaultModelData) return;
     setDefaultService(defaultModelData.service ?? "");
     setDefaultModel(defaultModelData.defaultModel ?? "");
+    setManualDefaultModel(false);
   }, [defaultModelData]);
 
   useEffect(() => {
@@ -335,26 +354,68 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
             <div className="text-sm font-semibold">{t("settings.globalDefaultModel")}</div>
             <p className="mt-1 text-xs text-muted-foreground">{t("settings.globalDefaultModelHint")}</p>
           </div>
-          <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
-            <input
-              value={defaultService}
-              onChange={(e) => setDefaultService(e.target.value)}
-              placeholder={t("settings.serviceId")}
-              className={`${fieldClass} font-mono`}
-            />
-            <input
-              value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder={t("settings.modelId")}
-              className={`${fieldClass} font-mono`}
-            />
+          <div className="grid items-start gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
+            {routeServices.length > 0 ? (
+              <select
+                value={defaultService}
+                onChange={(e) => {
+                  const service = e.target.value;
+                  const models = routeServices.find((entry) => entry.id === service)?.models ?? [];
+                  setDefaultService(service);
+                  setDefaultModel((model) => models.includes(model) ? model : "");
+                  setManualDefaultModel(false);
+                }}
+                aria-label={t("settings.routeService")}
+                className={`${fieldClass} min-w-0`}
+              >
+                <option value="" disabled>{t("settings.routeService")}</option>
+                {defaultService && !defaultServiceConfig && <option value={defaultService}>{defaultService}</option>}
+                {routeServices.map((service) => <option key={service.id} value={service.id}>{service.label}</option>)}
+              </select>
+            ) : (
+              <input
+                value={defaultService}
+                onChange={(e) => setDefaultService(e.target.value)}
+                placeholder={t("settings.serviceId")}
+                className={`${fieldClass} font-mono`}
+              />
+            )}
+            <div className="min-w-0 space-y-2">
+              {defaultModelOptions.length > 0 && (
+                <select
+                  value={manualDefaultModel ? MANUAL_MODEL_OPTION : defaultModel}
+                  onChange={(e) => {
+                    const model = e.target.value;
+                    setManualDefaultModel(model === MANUAL_MODEL_OPTION);
+                    if (model !== MANUAL_MODEL_OPTION) setDefaultModel(model);
+                  }}
+                  aria-label={t("settings.selectModel")}
+                  className={`${fieldClass} min-w-0`}
+                >
+                  <option value="" disabled>{t("settings.selectModel")}</option>
+                  {defaultModel && !manualDefaultModel && !defaultModelOptions.includes(defaultModel) && (
+                    <option value={defaultModel}>{defaultModel}</option>
+                  )}
+                  {defaultModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+                  <option value={MANUAL_MODEL_OPTION}>{t("settings.manualModel")}</option>
+                </select>
+              )}
+              {(manualDefaultModel || defaultModelOptions.length === 0) && (
+                <input
+                  value={defaultModel}
+                  onChange={(e) => setDefaultModel(e.target.value)}
+                  placeholder={t("settings.modelId")}
+                  className={`${fieldClass} font-mono`}
+                />
+              )}
+            </div>
             <button
               onClick={() => runSave("default-model", async () => {
                 await putApi("/project/default-model", {
                   service: defaultService.trim() || undefined,
                   defaultModel: defaultModel.trim(),
                 });
-                await refetchDefaultModel();
+                await Promise.all([refetchDefaultModel(), refetchServiceConfig()]);
               }, t("settings.saved"))}
               disabled={saving === "default-model" || !defaultModel.trim()}
               className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
@@ -367,56 +428,71 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           {overrideRows.length === 0 && (
             <p className="text-xs text-muted-foreground italic">{t("settings.noOverrides")}</p>
           )}
-          {overrideRows.map((row, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <select
-                value={row.agent}
-                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
-                aria-label={t("settings.agentName")}
-                className={`${fieldClass} min-w-0 flex-1`}
-              >
-                <option value="">{t("settings.agentName")}</option>
-                {row.agent && !MODEL_ROUTE_AGENTS.some(([agent]) => agent === row.agent) && (
-                  <option value={row.agent}>{row.agent}</option>
-                )}
-                {MODEL_ROUTE_AGENTS.map(([agent, zhLabel]) => (
-                  <option key={agent} value={agent}>{agent}（{zhLabel}）</option>
-                ))}
-              </select>
-              <span className="text-muted-foreground">→</span>
-              <input
-                value={row.model}
-                onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, model: e.target.value } : r)))}
-                placeholder={t("settings.modelId")}
-                className={`${fieldClass} flex-1 font-mono`}
-              />
-              <button
-                onClick={() => setOverrideRows((prev) => prev.filter((_, j) => j !== i))}
-                className="shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                aria-label="remove"
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
-          ))}
+          {overrideRows.map((row, i) => {
+            const selectedService = routeServices.find((service) => service.id === row.service);
+            const models = selectedService?.models ?? [];
+            const modelListId = `agent-route-models-${i}`;
+            return (
+              <div key={i} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_auto]">
+                <select
+                  value={row.agent}
+                  onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
+                  aria-label={t("settings.agentName")}
+                  className={`${fieldClass} col-span-2 min-w-0 md:col-span-1`}
+                >
+                  <option value="">{t("settings.agentName")}</option>
+                  {row.agent && !MODEL_ROUTE_AGENTS.some(([agent]) => agent === row.agent) && (
+                    <option value={row.agent}>{row.agent}</option>
+                  )}
+                  {MODEL_ROUTE_AGENTS.map(([agent, zhLabel]) => (
+                    <option key={agent} value={agent}>{agent}（{agent === CHAPTER_LOCAL_WRITE_AGENT ? t("reader.localWrite") : zhLabel}）</option>
+                  ))}
+                </select>
+                <select
+                  value={row.service}
+                  onChange={(e) => {
+                    const service = e.target.value;
+                    setOverrideRows((prev) => prev.map((r, j) => (j === i ? changeOverrideService(r, service) : r)));
+                  }}
+                  aria-label={t("settings.routeService")}
+                  className={`${fieldClass} col-span-2 min-w-0 md:col-span-1`}
+                >
+                  <option value="">{t("settings.autoService")}</option>
+                  {row.service && !selectedService && <option value={row.service}>{row.service}</option>}
+                  {routeServices.map((service) => <option key={service.id} value={service.id}>{service.label}</option>)}
+                </select>
+                <input
+                  value={row.model}
+                  onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, model: e.target.value } : r)))}
+                  aria-label={t("settings.modelId")}
+                  list={models.length ? modelListId : undefined}
+                  placeholder={row.agent === "chapter-plan-reviewer" && !row.model.trim()
+                    ? (isZh ? "未单独设置时继承读者模拟器" : "Inherits reader-simulator when unset")
+                    : t("settings.modelId")}
+                  className={`${fieldClass} min-w-0 font-mono`}
+                />
+                {models.length > 0 && <datalist id={modelListId}>{models.map((model) => <option key={model} value={model} />)}</datalist>}
+                <button
+                  onClick={() => setOverrideRows((prev) => prev.filter((_, j) => j !== i))}
+                  className="shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                  aria-label="remove"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => setOverrideRows((prev) => [...prev, { agent: "", model: "" }])}
+            onClick={() => setOverrideRows((prev) => [...prev, { agent: "", service: "", model: "" }])}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${c.btnSecondary}`}
           >
             <Plus size={14} /> {t("settings.addOverride")}
           </button>
           <button
             onClick={() => runSave("overrides", async () => {
-              const overrides: Record<string, unknown> = {};
-              for (const r of overrideRows) {
-                const agent = r.agent.trim();
-                const model = r.model.trim();
-                if (!agent || !model) continue;
-                overrides[agent] = r.rest && Object.keys(r.rest).length > 0 ? { ...r.rest, model } : model;
-              }
-              await putApi("/project/model-overrides", { overrides });
+              await putApi("/project/model-overrides", { overrides: buildModelOverrides(overrideRows) });
               await refetchOverrides();
             }, t("settings.saved"))}
             disabled={saving === "overrides"}

@@ -122,6 +122,8 @@ const WORKER_SKILL_AUDIENCES: Readonly<Record<string, string>> = {
   writer: "writer",
   reviser: "reviser",
   "continuity-auditor": "reviewer",
+  "short-fiction-writer": "writer",
+  "short-fiction-draft-reviewer": "reviewer",
   "reader-simulator": "reader",
   "state-validator": "settler",
   composer: "selector",

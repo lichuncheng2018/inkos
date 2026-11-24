@@ -1,12 +1,13 @@
-import { access, mkdir, readdir, rename, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChapterMeta } from "../models/chapter.js";
+import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
 import { toPosixPath } from "../utils/posix-path.js";
 
 export interface ChapterDeleteDeps {
   bookDir(bookId: string): string;
   loadChapterIndex(bookId: string): Promise<ReadonlyArray<ChapterMeta>>;
-  rollbackToChapter(bookId: string, targetChapter: number): Promise<ReadonlyArray<number>>;
+  rollbackToChapter(bookId: string, targetChapter: number, archiveWrites?: ReadonlyArray<AtomicFileWrite>): Promise<ReadonlyArray<number>>;
 }
 
 export interface DeleteLatestChapterOptions {
@@ -78,53 +79,36 @@ export async function deleteLatestChapter(
     return match !== null && parseInt(match[1]!, 10) === latest;
   });
 
-  const trashedFiles: string[] = [];
-  if (chapterFiles.length > 0) {
-    await mkdir(trashDir, { recursive: true });
-  }
+  const archiveWrites: AtomicFileWrite[] = [];
+  const reservedNames = new Set<string>();
   for (const file of chapterFiles) {
-    const trashedName = await pickAvailableName(trashDir, file);
-    await rename(join(chaptersDir, file), join(trashDir, trashedName));
-    trashedFiles.push(toPosixPath(join("chapters", ".trash", trashedName)));
+    const trashedName = await pickAvailableName(trashDir, file, reservedNames);
+    reservedNames.add(trashedName);
+    archiveWrites.push({
+      relativePath: join("chapters", ".trash", trashedName),
+      content: await readFile(join(chaptersDir, file)),
+    });
   }
 
-  let discarded: ReadonlyArray<number>;
-  try {
-    discarded = await deps.rollbackToChapter(bookId, rollbackTarget);
-  } catch (error) {
-    const restoreErrors: unknown[] = [];
-    for (let index = chapterFiles.length - 1; index >= 0; index -= 1) {
-      const original = chapterFiles[index]!;
-      const trashed = trashedFiles[index]!;
-      try {
-        await rename(join(bookDir, trashed), join(chaptersDir, original));
-      } catch (restoreError) {
-        restoreErrors.push(restoreError);
-      }
-    }
-    if (restoreErrors.length > 0) {
-      throw new AggregateError([error, ...restoreErrors], "Chapter rollback failed and the archived manuscript could not be fully restored");
-    }
-    throw error;
-  }
+  const discarded = await deps.rollbackToChapter(bookId, rollbackTarget, archiveWrites);
   const entry = index.find((chapter) => chapter.number === latest);
 
   return {
     bookId,
     deletedChapter: latest,
     title: entry?.title ?? `第${latest}章`,
-    trashedFiles,
+    trashedFiles: archiveWrites.map((write) => toPosixPath(write.relativePath)),
     rolledBackTo: rollbackTarget,
     discarded,
   };
 }
 
-async function pickAvailableName(dir: string, fileName: string): Promise<string> {
+async function pickAvailableName(dir: string, fileName: string, reservedNames: ReadonlySet<string>): Promise<string> {
   const dot = fileName.lastIndexOf(".");
   const base = dot === -1 ? fileName : fileName.slice(0, dot);
   const ext = dot === -1 ? "" : fileName.slice(dot);
   let candidate = fileName;
-  for (let suffix = 2; await pathExists(join(dir, candidate)); suffix += 1) {
+  for (let suffix = 2; reservedNames.has(candidate) || await pathExists(join(dir, candidate)); suffix += 1) {
     candidate = `${base}-${suffix}${ext}`;
   }
   return candidate;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { previousChapterTail, renderWriterContext, selectWriterContext } from "../utils/writer-context.js";
+import { splitChapterMemoBody } from "../utils/narrative-control.js";
 
 const entry = (source: string, excerpt: string) => ({ source, reason: "selected", excerpt, protection: "compressible" as const });
 const fact = (subject: string, object: string, from: number, until?: number) => entry(
@@ -7,6 +8,27 @@ const fact = (subject: string, object: string, from: number, until?: number) => 
   [`subject: ${subject}`, "predicate: 持有", `object: ${object}`, `validFromChapter: ${from}`, ...(until === undefined ? [] : [`validUntilChapter: ${until}`])].join("\n"),
 );
 const memo = { goal: "陈平用养气丹换到柴房的钥匙", body: "### 展开｜柴房｜陈平、周茂\n周茂要价。", threadRefs: ["H2"] };
+
+describe("chapter memo writer projection", () => {
+  it("keeps the negotiation in the writing task and the balance in continuity notes", () => {
+    expect(splitChapterMemoBody([
+      "## 场次", "### 展开｜档口", "- 张椿承答应坏卡先找他，凭板号追溯，梁老板给留货条。",
+      "## 备注", "- 托管本金一万亿，本章零支出。", "### 期末", "- 未付订金。",
+    ].join("\r\n"))).toEqual({
+      scenes: "## 场次\n### 展开｜档口\n- 张椿承答应坏卡先找他，凭板号追溯，梁老板给留货条。",
+      notes: "- 托管本金一万亿，本章零支出。\n### 期末\n- 未付订金。",
+    });
+  });
+
+  it("does not discard prose or subsequent task sections from existing memos", () => {
+    expect(splitChapterMemoBody("The owner accepts the receipt.")).toEqual({
+      scenes: "The owner accepts the receipt.", notes: "",
+    });
+    expect(splitChapterMemoBody("## Scenes\nReturn it.\n## Notes\nNo payment yet.\n## Ending\nThe owner closes the door.")).toEqual({
+      scenes: "## Scenes\nReturn it.\n\n## Ending\nThe owner closes the door.", notes: "No payment yet.",
+    });
+  });
+});
 
 describe("writer context view", () => {
   const entries = [

@@ -195,6 +195,35 @@ describe("Studio API mini-flows", () => {
     expect(works.works.map(work => work.id).sort()).toEqual(["ready-book", "unfinished-book"]);
   });
 
+  it("uses the Chinese book title as the export download filename", async () => {
+    const id = "night-voyage";
+    const title = "《夜航》/作者's 版本 (修订)";
+    const createdAt = "2026-09-09T00:00:00.000Z";
+    const source = join(root, "works", id, "source");
+    const chapters = join(source, "chapters");
+    await mkdir(chapters, { recursive: true });
+    await writeFile(join(source, "book.json"), JSON.stringify({
+      id, title, platform: "local", genre: "mystery", status: "active",
+      targetChapters: 3, chapterWordCount: 500, language: "zh", createdAt, updatedAt: createdAt,
+    }));
+    await writeFile(join(chapters, "index.json"), JSON.stringify([{
+      number: 1, title: "启航", wordCount: 8, observations: [], provenance: "imported",
+      createdAt, updatedAt: createdAt,
+    }]));
+    await writeFile(join(chapters, "0001_启航.md"), "# 第1章 启航\n\n船离开了港口。\n", "utf8");
+    const app = createStudioServer({} as never, root);
+
+    for (const format of ["txt", "md", "epub"]) {
+      const response = await app.request(`/api/v1/books/${id}/export?format=${format}`);
+      expect(response.status).toBe(200);
+      const disposition = response.headers.get("Content-Disposition");
+      expect(disposition).toContain("filename*=UTF-8''");
+      const encodedName = disposition?.match(/filename\*=UTF-8''([^'()*]+)$/)?.[1];
+      expect(decodeURIComponent(encodedName ?? "")).toBe(`《夜航》_作者's 版本 (修订).${format}`);
+      if (format === "txt") expect(await response.text()).toContain("船离开了港口。");
+    }
+  });
+
   it("exposes canonical Works and their accepted artifacts", async () => {
     const initial = createInitialWorkManifestWrite({
       workId: "night-script",

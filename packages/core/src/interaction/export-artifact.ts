@@ -107,6 +107,8 @@ export async function buildExportArtifact(
   const bookDir = state.bookDir(bookId);
   const chaptersDir = join(bookDir, "chapters");
   const outputPath = options.outputPath ?? join(bookDir, "exports", `${bookId}.${format}`);
+  const fileTitle = book.title.trim().replace(/[<>:"/\\|?*\p{Cc}]/gu, "_") || bookId;
+  const fileName = `${fileTitle}.${format}`;
   const chapterFiles = buildChapterFileLookup(await readdir(chaptersDir), chapters);
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
   const readChapter = async (chapter: typeof chapters[number], file: string) => {
@@ -133,7 +135,7 @@ export async function buildExportArtifact(
     );
     return {
       outputPath,
-      fileName: `${bookId}.epub`,
+      fileName,
       chaptersExported: chapters.length,
       totalWords,
       format,
@@ -154,7 +156,7 @@ export async function buildExportArtifact(
 
   return {
     outputPath,
-    fileName: `${bookId}.${format}`,
+    fileName,
     chaptersExported: chapters.length,
     totalWords,
     format,
